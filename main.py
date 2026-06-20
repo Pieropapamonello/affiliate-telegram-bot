@@ -12,6 +12,7 @@ Funzioni:
 
 import os
 import json
+import time
 import logging
 import threading
 import re
@@ -63,7 +64,12 @@ WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 FIRESTORE_PROJECT_ID = os.environ.get("FIRESTORE_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
 
-# AI per i testi dei post — opzionale. Provider: Gemini (gratis) o Claude.
+# Realtime Database (feed live delle offerte pubblicate) — opzionale
+RTDB_URL = os.environ.get("RTDB_URL", "").rstrip("/")
+
+# AI per i testi dei post — opzionale. Provider in ordine: Groq > Gemini > Claude.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -77,9 +83,9 @@ if not TELEGRAM_TOKEN:
 if not DEEPLINK_TEMPLATE and SKIMLINKS_ID:
     DEEPLINK_TEMPLATE = f"https://go.skimresources.com/?id={SKIMLINKS_ID}&xs=1&url={{url}}"
 
-# Client AI Claude (creato solo se la chiave è presente e Gemini non è configurato)
+# Client AI Claude (solo se la chiave è presente e nessun provider gratuito è configurato)
 ai_client = None
-if ANTHROPIC_API_KEY and not GEMINI_API_KEY:
+if ANTHROPIC_API_KEY and not (GROQ_API_KEY or GEMINI_API_KEY):
     try:
         from anthropic import AsyncAnthropic
 
@@ -87,12 +93,15 @@ if ANTHROPIC_API_KEY and not GEMINI_API_KEY:
     except Exception as e:
         logger.warning(f"Claude non disponibile: {e}")
 
-# Firestore (inizializzato in init_firestore)
+# Firestore / RTDB (inizializzati in init_firestore / init_rtdb)
 firestore_db = None
 USE_FIRESTORE = False
+rtdb_creds = None
 
 
 def _ai_status() -> str:
+    if GROQ_API_KEY:
+        return f"Groq ({GROQ_MODEL})"
     if GEMINI_API_KEY:
         return f"Gemini ({GEMINI_MODEL})"
     if ai_client:
@@ -109,6 +118,7 @@ logger.info(f"  Canale auto-post: {CHANNEL_ID or '(non impostato)'}")
 logger.info(f"  Monitor prezzi: ogni {CHECK_INTERVAL_MIN} min, soglia {DISCOUNT_THRESHOLD}%")
 logger.info(f"  AI copy: {_ai_status()}")
 logger.info(f"  DB: {'Firestore' if (FIRESTORE_PROJECT_ID or GOOGLE_CREDENTIALS_JSON) else 'file JSON'}")
+logger.info(f"  Realtime DB: {'attivo' if (RTDB_URL and GOOGLE_CREDENTIALS_JSON) else 'disattivo'}")
 logger.info(f"  PORT: {PORT}")
 
 
@@ -132,6 +142,43 @@ def init_firestore():
         logger.info("Firestore attivo")
     except Exception as e:
         logger.warning(f"Firestore non disponibile, uso file JSON: {e}")
+
+
+def init_rtdb():
+    """Prepara le credenziali per scrivere sul Realtime Database (REST)."""
+    global rtdb_creds
+    if not (RTDB_URL and GOOGLE_CREDENTIALS_JSON):
+        return
+    try:
+        from google.oauth2 import service_account
+
+        info = json.loads(GOOGLE_CREDENTIALS_JSON)
+        rtdb_creds = service_account.Credentials.from_service_account_info(
+            info,
+            scopes=[
+                "https://www.googleapis.com/auth/firebase.database",
+                "https://www.googleapis.com/auth/userinfo.email",
+            ],
+        )
+        logger.info("Realtime DB attivo")
+    except Exception as e:
+        logger.warning(f"Realtime DB non disponibile: {e}")
+
+
+async def rtdb_push(path: str, data: dict) -> None:
+    """Aggiunge un record (push) sul Realtime Database. Non blocca mai il bot in caso di errore."""
+    if not (RTDB_URL and rtdb_creds):
+        return
+    try:
+        import google.auth.transport.requests
+
+        if not rtdb_creds.valid:
+            rtdb_creds.refresh(google.auth.transport.requests.Request())
+        url = f"{RTDB_URL}/{path}.json"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(url, params={"access_token": rtdb_creds.token}, json=data)
+    except Exception as e:
+        logger.warning(f"rtdb_push error: {e}")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -489,11 +536,38 @@ async def generate_ai_copy(info: dict, price_line: str, link: str) -> str:
         f"Valutazione: {info.get('rating') or 'n/d'}\n"
         f"Link: {link}"
     )
+    if GROQ_API_KEY:
+        return await _groq_copy(AI_SYSTEM_PROMPT, user)
     if GEMINI_API_KEY:
         return await _gemini_copy(AI_SYSTEM_PROMPT, user)
     if ai_client:
         return await _claude_copy(AI_SYSTEM_PROMPT, user)
     return None
+
+
+async def _groq_copy(system: str, user: str) -> str:
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+    payload = {
+        "model": GROQ_MODEL,
+        "max_tokens": 400,
+        "temperature": 0.9,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(url, headers=headers, json=payload)
+            data = r.json()
+            if "choices" not in data:
+                logger.error(f"Groq response: {str(data)[:300]}")
+                return None
+            return (data["choices"][0]["message"]["content"] or "").strip() or None
+    except Exception as e:
+        logger.error(f"Groq copy error: {e}")
+        return None
 
 
 async def _gemini_copy(system: str, user: str) -> str:
@@ -622,6 +696,19 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
             price_line = f"Prezzo: {current_price:.2f}€"
     else:
         price_line = "Prezzo: n/d"
+
+    # Feed live offerte sul Realtime Database (se configurato)
+    await rtdb_push(
+        "deals",
+        {
+            "title": info.get("title") or "Prodotto",
+            "price": current_price,
+            "old_price": old_price,
+            "url": short_url,
+            "store": "amazon" if entry.get("is_amazon") else "altro",
+            "ts": int(time.time()),
+        },
+    )
 
     ai_text = await generate_ai_copy(info, price_line, short_url)
     target = entry.get("chat_id")
@@ -869,6 +956,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 def main():
     start_health_check_server()
     init_firestore()
+    init_rtdb()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
