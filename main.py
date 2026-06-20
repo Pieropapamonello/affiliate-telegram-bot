@@ -75,6 +75,10 @@ GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", 
 # Realtime Database (feed live delle offerte pubblicate) — opzionale
 RTDB_URL = os.environ.get("RTDB_URL", "").rstrip("/")
 
+# YouTube Data API (per trovare un video pertinente e corto) — opzionale
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
+VIDEO_MAX_SECONDS = int(os.environ.get("VIDEO_MAX_SECONDS", 180))
+
 # AI per i testi dei post — opzionale. Provider in ordine: Groq > Gemini > Claude.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -557,22 +561,54 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
     return info
 
 
-async def find_youtube_video(query: str) -> str:
-    """Cerca un video YouTube per il prodotto (best-effort, senza API)."""
-    if not query:
+def _iso8601_to_seconds(s: str) -> int:
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", s or "")
+    if not m:
         return None
+    h, mi, se = int(m.group(1) or 0), int(m.group(2) or 0), int(m.group(3) or 0)
+    return h * 3600 + mi * 60 + se
+
+
+def _clean_query(title: str) -> str:
+    # Primi termini significativi del titolo (evita la coda marketing lunghissima)
+    words = re.split(r"[\s,;:-]+", title or "")
+    return " ".join(w for w in words if len(w) > 1)[:80]
+
+
+async def find_youtube_video(title: str) -> str:
+    """Trova un video YouTube pertinente e CORTO (<VIDEO_MAX_SECONDS) via API ufficiale."""
+    if not (title and YOUTUBE_API_KEY):
+        return None
+    query = _clean_query(title)
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            r = await client.get(
-                "https://www.youtube.com/results",
-                params={"search_query": query},
-                headers={"User-Agent": USER_AGENTS[0], "Accept-Language": "it-IT,it;q=0.9"},
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            s = await client.get(
+                "https://www.googleapis.com/youtube/v3/search",
+                params={
+                    "key": YOUTUBE_API_KEY,
+                    "part": "snippet",
+                    "q": query,
+                    "type": "video",
+                    "maxResults": 5,
+                    "videoDuration": "short",  # < 4 min, poi filtriamo a VIDEO_MAX_SECONDS
+                    "relevanceLanguage": "it",
+                },
             )
-            m = re.search(r'"videoId":"([\w-]{11})"', r.text)
-            if m:
-                return f"https://www.youtube.com/watch?v={m.group(1)}"
+            sd = s.json()
+            ids = [it["id"]["videoId"] for it in sd.get("items", []) if it.get("id", {}).get("videoId")]
+            if not ids:
+                return None
+            v = await client.get(
+                "https://www.googleapis.com/youtube/v3/videos",
+                params={"key": YOUTUBE_API_KEY, "part": "contentDetails", "id": ",".join(ids)},
+            )
+            vd = v.json()
+            for it in vd.get("items", []):
+                dur = _iso8601_to_seconds(it.get("contentDetails", {}).get("duration"))
+                if dur and dur <= VIDEO_MAX_SECONDS:
+                    return f"https://www.youtube.com/watch?v={it['id']}"
     except Exception as e:
-        logger.warning(f"youtube search error: {e}")
+        logger.warning(f"youtube API error: {e}")
     return None
 
 
@@ -868,8 +904,25 @@ async def _claude_chat(system: str, user: str, max_tokens: int = 400) -> str:
 # ----------------------------------------------------------------------------
 # Messaggi
 # ----------------------------------------------------------------------------
+def one_line(text: str, maxlen: int = 70) -> str:
+    if not text:
+        return text
+    t = " ".join(str(text).split())
+    if len(t) <= maxlen:
+        return t
+    return t[:maxlen].rsplit(" ", 1)[0] + "…"
+
+
+def max_lines(text: str, n: int = 3, line_len: int = 90) -> str:
+    if not text:
+        return text
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    lines = [(ln[:line_len].rsplit(" ", 1)[0] + "…") if len(ln) > line_len else ln for ln in lines]
+    return "\n".join(lines[:n])
+
+
 def build_product_message(info: dict, short_url: str, user_name: str = None, review: str = None) -> str:
-    title = info.get("title") or "Prodotto"
+    title = one_line(info.get("title") or "Prodotto")
     price = info.get("price") or ""
     rating = info.get("rating") or ""
     condition = info.get("condition_status") or ""
@@ -899,7 +952,7 @@ def build_product_message(info: dict, short_url: str, user_name: str = None, rev
     if rating_stars:
         msg += f"{rating_stars}\n\n"
     if review:
-        msg += f"<b>📝 Recensione:</b>\n{review}\n\n"
+        msg += f"<b>📝 Recensione:</b>\n{max_lines(review, 3)}\n\n"
     if promotion:
         msg += f"<b>🎉 Promozione:</b> {promotion}\n\n"
     if coupon:
