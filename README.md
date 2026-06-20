@@ -1,10 +1,26 @@
-# 🔗 Multi-Store Affiliate Bot — Telegram
+# 🔗 Multi-Store Affiliate Bot + Automazione — Telegram
 
-Bot Telegram che trasforma il link di un prodotto di **qualsiasi negozio online** in un **link affiliato**.
+Bot Telegram che trasforma il link di un prodotto di **qualsiasi negozio online** in un **link affiliato**, con automazione stile Doublegram/Afflow.
 
 - **Amazon** → usa il tuo tag affiliato nativo (`AFFILIATE_TAG`) per le commissioni migliori, con scraping di titolo/prezzo/immagine/recensioni.
 - **Altri store** → usa una **rete aggregatrice** (Sovrn/Skimlinks, Admitad, Awin…) tramite un *deeplink template* o il tuo Publisher ID Skimlinks.
+- **Monitor sconti** → watchlist di prodotti, controllo prezzi periodico, alert automatico al calo.
+- **Auto-post su canale** → pubblica offerte formattate su un canale Telegram.
+- **Copy AI (Claude)** → testo del post generato automaticamente.
 - **Accorciamento** opzionale tramite **YOURLS**.
+
+## 🤖 Comandi
+
+| Comando | Funzione |
+|---|---|
+| _invia un link_ | Restituisce il link affiliato |
+| `/watch <link> [prezzo]` | Monitora il prodotto; avvisa al calo (o sotto il prezzo target) |
+| `/list` | Mostra i prodotti monitorati |
+| `/unwatch <numero>` | Rimuove un prodotto dalla watchlist |
+| `/deal <link>` | Pubblica subito un'offerta (sul canale se configurato) |
+| `/help` | Aiuto |
+
+> ⚠️ La watchlist è salvata in `watchlist.json`. Su Render Free il disco è **effimero** (si azzera a ogni deploy/restart): per persistenza aggiungi un disco Render o imposta `DATA_DIR` su un volume.
 
 ## ⚙️ Come funziona l'affiliazione "qualsiasi store"
 
@@ -24,6 +40,12 @@ Non è possibile rendere affiliato un link arbitrario senza essere iscritti al p
 | `DEEPLINK_TEMPLATE` | — | Template con `{url}`, es. `https://go.skimresources.com/?id=XXXX&xs=1&url={url}` |
 | `YOURLS_URL` | — | URL installazione YOURLS (per accorciare) |
 | `YOURLS_SIGNATURE` | — | Signature API di YOURLS |
+| `CHANNEL_ID` | — | Canale per auto-post (`@miocanale` o `-100123…`); il bot dev'essere admin |
+| `CHECK_INTERVAL_MIN` | — | Ogni quanti minuti controllare i prezzi (default 60) |
+| `DISCOUNT_THRESHOLD` | — | % di calo minimo per l'alert (default 10) |
+| `ANTHROPIC_API_KEY` | — | Chiave API Claude per i testi AI dei post |
+| `AI_MODEL` | — | Modello Claude (default `claude-opus-4-8`) |
+| `DATA_DIR` | — | Cartella per `watchlist.json` (default `.`) |
 | `PORT` | — | Porta health-check (Render la imposta da sé) |
 
 > ⚠️ Non committare mai `.env` o token nel codice. Usa solo variabili d'ambiente.
