@@ -69,6 +69,9 @@ CHECK_INTERVAL_MIN = int(os.environ.get("CHECK_INTERVAL_MIN", 60))  # ogni quant
 DISCOUNT_THRESHOLD = float(os.environ.get("DISCOUNT_THRESHOLD", 10))  # % calo minimo per alert
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+# Password una-tantum per diventare admin dal bot (comando /admin <password>)
+SETUP_PASSWORD = os.environ.get("SETUP_PASSWORD", "")
 
 # Firestore (Google) per la persistenza della watchlist — opzionale
 FIRESTORE_PROJECT_ID = os.environ.get("FIRESTORE_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
@@ -1075,6 +1078,51 @@ def save_watchlist(wl: list) -> None:
 
 
 # ----------------------------------------------------------------------------
+# Impostazioni bot (admin, canale) — Firestore o file
+# ----------------------------------------------------------------------------
+def load_settings() -> dict:
+    if USE_FIRESTORE:
+        try:
+            doc = firestore_db.collection("bot").document("settings").get()
+            return doc.to_dict() if doc.exists else {}
+        except Exception as e:
+            logger.error(f"settings load error: {e}")
+            return {}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_settings(s: dict) -> None:
+    if USE_FIRESTORE:
+        try:
+            firestore_db.collection("bot").document("settings").set(s)
+            return
+        except Exception as e:
+            logger.error(f"settings save error: {e}")
+            return
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"settings save error: {e}")
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in load_settings().get("admins", [])
+
+
+def admins_exist() -> bool:
+    return bool(load_settings().get("admins"))
+
+
+def get_post_channel() -> str:
+    return load_settings().get("channel") or CHANNEL_ID
+
+
+# ----------------------------------------------------------------------------
 # Pubblicazione offerta (canale o utente)
 # ----------------------------------------------------------------------------
 async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_price: float = None):
@@ -1105,7 +1153,7 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
 
     ai_text = await generate_ai_copy(info, price_line, short_url)
     target = entry.get("chat_id")
-    destination = CHANNEL_ID or target
+    destination = get_post_channel() or target
 
     if ai_text:
         body = ai_text
@@ -1179,12 +1227,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome = (
         "👋 Ciao! Sono il tuo Bot Offerte & Affiliazione.\n\n"
         "🔗 Inviami il link di un prodotto (Amazon o altri store) e ti do il link affiliato.\n\n"
-        "🤖 Funzioni di automazione:\n"
+        "🤖 Funzioni di automazione (admin):\n"
         "• /watch <link> [prezzo] – monitora un prodotto e avvisa al calo\n"
         "• /list – mostra i prodotti monitorati\n"
         "• /unwatch <numero> – rimuovi dalla lista\n"
-        "• /deal <link> – pubblica subito un'offerta\n"
-        "• /help – aiuto\n"
+        "• /deal <link> – pubblica subito un'offerta\n\n"
+        "⚙️ Configurazione (admin):\n"
+        "• /admin <password> – diventa admin\n"
+        "• /setchannel <@canale|id> – dove pubblicare le offerte\n"
+        "• /config – stato configurazione\n"
+        "• /id – mostra il tuo id\n"
     )
     await update.message.reply_text(welcome)
 
@@ -1193,7 +1245,88 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await start(update, context)
 
 
+async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        f"👤 Tuo user id: <code>{update.effective_user.id}</code>\n"
+        f"💬 Chat id: <code>{update.effective_chat.id}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not SETUP_PASSWORD:
+        await update.message.reply_text("⚠️ Setup non configurato (manca SETUP_PASSWORD).")
+        return
+    if not context.args or context.args[0] != SETUP_PASSWORD:
+        await update.message.reply_text("❌ Password errata. Uso: /admin <password>")
+        return
+    s = load_settings()
+    admins = s.get("admins", [])
+    uid = update.effective_user.id
+    if uid not in admins:
+        admins.append(uid)
+        s["admins"] = admins
+        save_settings(s)
+    await update.message.reply_text("✅ Ora sei admin. Comandi: /setchannel, /config, /watch, /list, /deal")
+
+
+def _deny_if_not_admin(update: Update) -> bool:
+    """True se l'utente NON è autorizzato (admin esistono e lui non lo è)."""
+    return admins_exist() and not is_admin(update.effective_user.id)
+
+
+async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /setchannel <@canale o id>\n"
+            "Prima aggiungi il bot come AMMINISTRATORE del canale.\n"
+            "Per togliere: /setchannel off"
+        )
+        return
+    value = context.args[0]
+    s = load_settings()
+    if value.lower() in ("off", "none", "-"):
+        s["channel"] = ""
+        save_settings(s)
+        await update.message.reply_text("✅ Canale rimosso. Le offerte torneranno in chat.")
+        return
+    s["channel"] = value
+    save_settings(s)
+    # Test invio
+    try:
+        await context.bot.send_message(chat_id=value, text="✅ Canale collegato: pubblicherò qui le offerte.")
+        await update.message.reply_text(f"✅ Canale impostato: {value} (messaggio di prova inviato).")
+    except Exception as e:
+        await update.message.reply_text(
+            f"⚠️ Canale salvato ({value}) ma NON riesco a scrivere lì: {e}\n"
+            "Assicurati che il bot sia AMMINISTRATORE del canale."
+        )
+
+
+async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    s = load_settings()
+    wl = load_watchlist()
+    await update.message.reply_text(
+        "<b>⚙️ Configurazione</b>\n"
+        f"Canale: {s.get('channel') or CHANNEL_ID or '(nessuno → posta in chat)'}\n"
+        f"Admin: {len(s.get('admins', []))}\n"
+        f"Prodotti monitorati: {len(wl)}\n"
+        f"AI: {_ai_status()}\n"
+        f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
     args = context.args
     if not args:
         await update.message.reply_text("Uso: /watch <link> [prezzo_target]\nEs: /watch https://amazon.it/dp/XXXX 19.90")
@@ -1266,6 +1399,9 @@ async def unwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def deal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
     if not context.args:
         await update.message.reply_text("Uso: /deal <link>")
         return
@@ -1393,6 +1529,10 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("id", id_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("setchannel", setchannel_cmd))
+    app.add_handler(CommandHandler("config", config_cmd))
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
