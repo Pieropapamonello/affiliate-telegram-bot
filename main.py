@@ -409,8 +409,8 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
         info["video"] = extract_page_video(soup)
         info["source"] = store_name_from_url(url)
         info["condition_status"] = detect_seller_condition(url, soup)
-        info["promotion"] = extract_promotion(soup)
-        info["coupon"] = extract_coupon(soup)
+        # Promozione/coupon disattivati: l'euristica generava falsi positivi
+        # (es. "Promozione: Promozioni" preso da un menu). Riattivabili con selettori precisi.
         return info
 
     info = dict(EMPTY_INFO)
@@ -460,14 +460,26 @@ def extract_amazon_title(soup) -> str:
 
 def extract_amazon_price(soup) -> str:
     try:
-        container = soup.find("span", {"class": "a-price"})
-        if container:
-            prices = re.findall(r"[\d.,€$]+", container.get_text(strip=True))
-            if prices:
-                return prices[0]
-        whole = soup.find("span", {"class": "a-price-whole"})
-        if whole:
-            return whole.get_text(strip=True)
+        # Cerca il prezzo PRINCIPALE nei blocchi ufficiali (evita prezzi di accessori/varianti)
+        for div_id in [
+            "corePriceDisplay_desktop_feature_div",
+            "corePrice_feature_div",
+            "apex_desktop",
+            "buybox",
+        ]:
+            div = soup.find(id=div_id)
+            if div:
+                off = div.find("span", {"class": "a-offscreen"})
+                if off and off.get_text(strip=True):
+                    return off.get_text(strip=True)
+        for pid in ["priceblock_ourprice", "priceblock_dealprice", "priceblock_saleprice"]:
+            el = soup.find(id=pid)
+            if el and el.get_text(strip=True):
+                return el.get_text(strip=True)
+        # Ultima spiaggia: primo prezzo "a-offscreen" della pagina
+        off = soup.find("span", {"class": "a-offscreen"})
+        if off and off.get_text(strip=True):
+            return off.get_text(strip=True)
     except Exception as e:
         logger.error(f"Error extracting price: {e}")
     return None
