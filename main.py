@@ -597,6 +597,23 @@ async def shorten_with_yourls(url: str) -> str:
         return url
 
 
+async def shorten_url(url: str) -> str:
+    """Accorcia un link: prima YOURLS (se attivo), poi fallback gratuito is.gd."""
+    if YOURLS_URL and YOURLS_SIGNATURE:
+        short = await shorten_with_yourls(url)
+        if short and short != url:
+            return short
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get("https://is.gd/create.php", params={"format": "simple", "url": url})
+            if r.status_code == 200 and r.text.strip().startswith("http"):
+                return r.text.strip()
+            logger.warning(f"is.gd response: {r.text[:120]}")
+    except Exception as e:
+        logger.warning(f"is.gd error: {e}")
+    return url
+
+
 # ----------------------------------------------------------------------------
 # AI copywriting (Claude)
 # ----------------------------------------------------------------------------
@@ -752,7 +769,7 @@ def build_product_message(info: dict, short_url: str, user_name: str = None, rev
         msg += f"<b>🎉 Promozione:</b> {promotion}\n\n"
     if coupon:
         msg += f"<b>🎟️ Coupon:</b> {coupon}\n\n"
-    msg += f"<b><a href='{short_url}'>👉 Clicca qui per acquistare</a></b>"
+    msg += f"<b>🛒 Acquista qui:</b>\n{short_url}"
     return msg
 
 
@@ -794,7 +811,7 @@ def save_watchlist(wl: list) -> None:
 # ----------------------------------------------------------------------------
 async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_price: float = None):
     affiliate_url, _ = build_affiliate_link(entry["url"])
-    short_url = await shorten_with_yourls(affiliate_url)
+    short_url = await shorten_url(affiliate_url)
 
     if current_price is not None:
         if old_price and old_price > current_price:
@@ -1046,7 +1063,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             youtube_url = await find_youtube_video(info["title"])
 
         await status_msg.edit_text("🔗 Accorciando...")
-        short_url = await shorten_with_yourls(affiliate_url)
+        short_url = await shorten_url(affiliate_url)
 
         message = build_product_message(info, short_url, user.first_name, review=review)
         await status_msg.delete()
