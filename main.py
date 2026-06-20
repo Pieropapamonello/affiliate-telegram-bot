@@ -45,6 +45,14 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # Amazon (tag affiliato nativo)
 AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "")
 
+# Amazon Creators API / PA-API (OAuth2) — dati prodotto affidabili. Opzionale.
+PAAPI_CLIENT_ID = os.environ.get("PAAPI_CLIENT_ID", "")
+PAAPI_CLIENT_SECRET = os.environ.get("PAAPI_CLIENT_SECRET", "")
+PAAPI_MARKETPLACE = os.environ.get("PAAPI_MARKETPLACE", "www.amazon.it")
+PAAPI_SCOPE = os.environ.get("PAAPI_SCOPE", "creatorsapi::default")
+PAAPI_TOKEN_URL = os.environ.get("PAAPI_TOKEN_URL", "https://api.amazon.com/auth/o2/token")
+PAAPI_HOST = os.environ.get("PAAPI_HOST", "https://creatorsapi.amazon")
+
 # Aggregatore per "qualsiasi store".
 SKIMLINKS_ID = os.environ.get("SKIMLINKS_ID", "")
 DEEPLINK_TEMPLATE = os.environ.get("DEEPLINK_TEMPLATE", "")
@@ -119,6 +127,7 @@ logger.info(f"  Monitor prezzi: ogni {CHECK_INTERVAL_MIN} min, soglia {DISCOUNT_
 logger.info(f"  AI copy: {_ai_status()}")
 logger.info(f"  DB: {'Firestore' if (FIRESTORE_PROJECT_ID or GOOGLE_CREDENTIALS_JSON) else 'file JSON'}")
 logger.info(f"  Realtime DB: {'attivo' if (RTDB_URL and GOOGLE_CREDENTIALS_JSON) else 'disattivo'}")
+logger.info(f"  Amazon PA-API: {'configurata' if (PAAPI_CLIENT_ID and PAAPI_CLIENT_SECRET) else 'disattiva (scraping)'}")
 logger.info(f"  PORT: {PORT}")
 
 
@@ -392,7 +401,133 @@ def extract_page_video(soup) -> str:
     return None
 
 
+# --- Amazon Creators API / PA-API (OAuth2) ---------------------------------
+_paapi_token = {"value": None, "exp": 0.0}
+
+
+def _dig(d, *path):
+    for p in path:
+        if isinstance(d, dict):
+            d = d.get(p)
+        else:
+            return None
+    return d
+
+
+async def _paapi_token_get() -> str:
+    now = time.time()
+    if _paapi_token["value"] and _paapi_token["exp"] - 60 > now:
+        return _paapi_token["value"]
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(
+                PAAPI_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": PAAPI_SCOPE,
+                    "client_id": PAAPI_CLIENT_ID,
+                    "client_secret": PAAPI_CLIENT_SECRET,
+                },
+            )
+            d = r.json()
+            tok = d.get("access_token")
+            if not tok:
+                logger.error(f"PA-API token error {r.status_code}: {str(d)[:200]}")
+                return None
+            _paapi_token["value"] = tok
+            _paapi_token["exp"] = now + int(d.get("expires_in", 3600))
+            logger.info("PA-API token ottenuto")
+            return tok
+    except Exception as e:
+        logger.error(f"PA-API token exception: {e}")
+        return None
+
+
+def _parse_paapi_item(it: dict) -> dict:
+    info = dict(EMPTY_INFO)
+    info["title"] = _dig(it, "itemInfo", "title", "displayValue") or _dig(it, "ItemInfo", "Title", "DisplayValue")
+    info["image"] = (
+        _dig(it, "images", "primary", "large", "url")
+        or _dig(it, "images", "primary", "medium", "url")
+        or _dig(it, "Images", "Primary", "Large", "URL")
+    )
+    listings = _dig(it, "offersV2", "listings") or _dig(it, "OffersV2", "Listings") or []
+    if listings:
+        l0 = listings[0]
+        info["price"] = (
+            _dig(l0, "price", "money", "displayAmount")
+            or _dig(l0, "price", "displayString")
+            or _dig(l0, "price", "displayAmount")
+            or _dig(l0, "Price", "Money", "DisplayAmount")
+        )
+    rating = _dig(it, "customerReviews", "starRating", "value") or _dig(it, "customerReviews", "starRating")
+    if isinstance(rating, (int, float)):
+        rating = str(rating)
+    info["rating"] = rating
+    info["reviews"] = _dig(it, "customerReviews", "count")
+    return info
+
+
+async def paapi_get_item(asin: str) -> dict:
+    if not (asin and PAAPI_CLIENT_ID and PAAPI_CLIENT_SECRET):
+        return None
+    token = await _paapi_token_get()
+    if not token:
+        return None
+    body = {
+        "itemIds": [asin],
+        "itemIdType": "ASIN",
+        "resources": [
+            "images.primary.large",
+            "itemInfo.title",
+            "offersV2.listings.price",
+            "customerReviews.starRating",
+            "customerReviews.count",
+        ],
+        "partnerTag": AFFILIATE_TAG,
+        "partnerType": "Associate",
+        "marketplace": PAAPI_MARKETPLACE,
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "x-marketplace": PAAPI_MARKETPLACE,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(f"{PAAPI_HOST}/catalog/v1/getItems", headers=headers, json=body)
+            data = r.json()
+        if r.status_code != 200:
+            logger.warning(f"PA-API getItems {r.status_code}: {str(data)[:250]}")
+            return None
+        items = (
+            _dig(data, "itemsResult", "items")
+            or _dig(data, "ItemsResult", "Items")
+            or data.get("items")
+        )
+        if not items:
+            logger.warning(f"PA-API nessun item: {str(data)[:300]}")
+            return None
+        parsed = _parse_paapi_item(items[0])
+        logger.info(f"PA-API OK per {asin}: {parsed.get('title')}")
+        return parsed
+    except Exception as e:
+        logger.error(f"PA-API getItems exception: {e}")
+        return None
+
+
 async def get_product_info(url: str, is_amazon: bool) -> dict:
+    # Per Amazon prova prima la PA-API (dati affidabili), poi fallback scraping
+    if is_amazon:
+        asin = extract_asin_from_url(url)
+        api_info = await paapi_get_item(asin) if asin else None
+        if api_info and api_info.get("title"):
+            for k in EMPTY_INFO:
+                api_info.setdefault(k, None)
+            api_info["source"] = store_name_from_url(url)
+            api_info["condition_status"] = detect_seller_condition(url, BeautifulSoup("", "html.parser"))
+            return api_info
+
     html = await fetch_html(url)
     if not html:
         info = dict(EMPTY_INFO)
