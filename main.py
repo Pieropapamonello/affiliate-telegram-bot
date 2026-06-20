@@ -21,7 +21,7 @@ from urllib.parse import urlencode, parse_qs, urlparse, quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
-from telegram import Update
+from telegram import Update, LinkPreviewOptions
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -343,16 +343,61 @@ EMPTY_INFO = {
     "rating": None,
     "reviews": None,
     "image": None,
+    "video": None,
+    "source": None,
     "condition_status": None,
     "promotion": None,
     "coupon": None,
 }
 
+STORE_NAMES = {
+    "amazon": "Amazon",
+    "aliexpress": "AliExpress",
+    "ebay": "eBay",
+    "zalando": "Zalando",
+    "mediaworld": "MediaWorld",
+    "unieuro": "Unieuro",
+    "temu": "Temu",
+    "banggood": "Banggood",
+    "shein": "Shein",
+    "ikea": "IKEA",
+    "decathlon": "Decathlon",
+}
+
+
+def store_name_from_url(url: str) -> str:
+    try:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        for key, name in STORE_NAMES.items():
+            if key in host:
+                return name
+        parts = host.split(".")
+        return parts[0].capitalize() if parts and parts[0] else host
+    except Exception:
+        return None
+
+
+def extract_page_video(soup) -> str:
+    for prop in ["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream"]:
+        v = meta_content(soup, prop)
+        if v and v.startswith("http"):
+            return v
+    vid = soup.find("video")
+    if vid:
+        if vid.get("src", "").startswith("http"):
+            return vid["src"]
+        source = vid.find("source")
+        if source and source.get("src", "").startswith("http"):
+            return source["src"]
+    return None
+
 
 async def get_product_info(url: str, is_amazon: bool) -> dict:
     html = await fetch_html(url)
     if not html:
-        return dict(EMPTY_INFO)
+        info = dict(EMPTY_INFO)
+        info["source"] = store_name_from_url(url)
+        return info
     soup = BeautifulSoup(html, "html.parser")
 
     if is_amazon:
@@ -361,6 +406,8 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
         info["price"] = extract_amazon_price(soup)
         info["rating"], info["reviews"] = extract_amazon_rating(soup)
         info["image"] = extract_amazon_image(soup)
+        info["video"] = extract_page_video(soup)
+        info["source"] = store_name_from_url(url)
         info["condition_status"] = detect_seller_condition(url, soup)
         info["promotion"] = extract_promotion(soup)
         info["coupon"] = extract_coupon(soup)
@@ -369,8 +416,29 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
     info = dict(EMPTY_INFO)
     info["title"] = meta_content(soup, "og:title") or (soup.title.get_text(strip=True) if soup.title else None)
     info["image"] = meta_content(soup, "og:image")
+    info["video"] = extract_page_video(soup)
+    info["source"] = store_name_from_url(url)
     info["price"] = meta_content(soup, "product:price:amount") or meta_content(soup, "og:price:amount")
     return info
+
+
+async def find_youtube_video(query: str) -> str:
+    """Cerca un video YouTube per il prodotto (best-effort, senza API)."""
+    if not query:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            r = await client.get(
+                "https://www.youtube.com/results",
+                params={"search_query": query},
+                headers={"User-Agent": USER_AGENTS[0], "Accept-Language": "it-IT,it;q=0.9"},
+            )
+            m = re.search(r'"videoId":"([\w-]{11})"', r.text)
+            if m:
+                return f"https://www.youtube.com/watch?v={m.group(1)}"
+    except Exception as e:
+        logger.warning(f"youtube search error: {e}")
+    return None
 
 
 def meta_content(soup, prop: str) -> str:
@@ -529,28 +597,51 @@ AI_SYSTEM_PROMPT = (
 )
 
 
+REVIEW_SYSTEM_PROMPT = (
+    "Sei un esperto di recensioni prodotti. Scrivi una mini-recensione onesta e utile "
+    "di ESATTAMENTE 3 righe brevi in italiano. Non inventare specifiche tecniche che non conosci: "
+    "parla dei vantaggi tipici di questo tipo di prodotto e per chi è adatto. "
+    "Niente emoji eccessive. Rispondi SOLO con la recensione, senza titoli né virgolette."
+)
+
+
 async def generate_ai_copy(info: dict, price_line: str, link: str) -> str:
     user = (
         f"Prodotto: {info.get('title') or 'Prodotto in offerta'}\n"
+        f"Store: {info.get('source') or 'n/d'}\n"
         f"{price_line}\n"
         f"Valutazione: {info.get('rating') or 'n/d'}\n"
         f"Link: {link}"
     )
+    return await _ai_complete(AI_SYSTEM_PROMPT, user, 400)
+
+
+async def generate_ai_review(info: dict, price_line: str) -> str:
+    user = (
+        f"Prodotto: {info.get('title') or 'Prodotto'}\n"
+        f"Store: {info.get('source') or 'n/d'}\n"
+        f"{price_line}\n"
+        f"Valutazione: {info.get('rating') or 'n/d'}"
+    )
+    return await _ai_complete(REVIEW_SYSTEM_PROMPT, user, 220)
+
+
+async def _ai_complete(system: str, user: str, max_tokens: int = 400) -> str:
     if GROQ_API_KEY:
-        return await _groq_copy(AI_SYSTEM_PROMPT, user)
+        return await _groq_chat(system, user, max_tokens)
     if GEMINI_API_KEY:
-        return await _gemini_copy(AI_SYSTEM_PROMPT, user)
+        return await _gemini_chat(system, user, max_tokens)
     if ai_client:
-        return await _claude_copy(AI_SYSTEM_PROMPT, user)
+        return await _claude_chat(system, user, max_tokens)
     return None
 
 
-async def _groq_copy(system: str, user: str) -> str:
+async def _groq_chat(system: str, user: str, max_tokens: int = 400) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     payload = {
         "model": GROQ_MODEL,
-        "max_tokens": 400,
+        "max_tokens": max_tokens,
         "temperature": 0.9,
         "messages": [
             {"role": "system", "content": system},
@@ -566,11 +657,11 @@ async def _groq_copy(system: str, user: str) -> str:
                 return None
             return (data["choices"][0]["message"]["content"] or "").strip() or None
     except Exception as e:
-        logger.error(f"Groq copy error: {e}")
+        logger.error(f"Groq error: {e}")
         return None
 
 
-async def _gemini_copy(system: str, user: str) -> str:
+async def _gemini_chat(system: str, user: str, max_tokens: int = 400) -> str:
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
@@ -578,7 +669,7 @@ async def _gemini_copy(system: str, user: str) -> str:
     payload = {
         "system_instruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": 400, "temperature": 0.9},
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.9},
     }
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -591,35 +682,36 @@ async def _gemini_copy(system: str, user: str) -> str:
             text = "".join(p.get("text", "") for p in parts)
             return text.strip() or None
     except Exception as e:
-        logger.error(f"Gemini copy error: {e}")
+        logger.error(f"Gemini error: {e}")
         return None
 
 
-async def _claude_copy(system: str, user: str) -> str:
+async def _claude_chat(system: str, user: str, max_tokens: int = 400) -> str:
     try:
         resp = await ai_client.messages.create(
             model=AI_MODEL,
-            max_tokens=400,
+            max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
         text = next((b.text for b in resp.content if b.type == "text"), None)
         return text.strip() if text else None
     except Exception as e:
-        logger.error(f"Claude copy error: {e}")
+        logger.error(f"Claude error: {e}")
         return None
 
 
 # ----------------------------------------------------------------------------
 # Messaggi
 # ----------------------------------------------------------------------------
-def build_product_message(info: dict, short_url: str, user_name: str = None) -> str:
+def build_product_message(info: dict, short_url: str, user_name: str = None, review: str = None) -> str:
     title = info.get("title") or "Prodotto"
     price = info.get("price") or ""
     rating = info.get("rating") or ""
     condition = info.get("condition_status") or ""
     promotion = info.get("promotion") or ""
     coupon = info.get("coupon") or ""
+    source = info.get("source") or ""
 
     clean_price = re.sub(r"€.*", "€", price).strip() if price else ""
 
@@ -634,12 +726,16 @@ def build_product_message(info: dict, short_url: str, user_name: str = None) -> 
     if user_name:
         msg += f"<b>👤:</b> {user_name} ha condiviso questo articolo\n\n"
     msg += f"<b>📌 Articolo:</b>\n{title}\n\n"
+    if source:
+        msg += f"<b>🏪 Store:</b> {source}\n\n"
     if condition:
         msg += f"<b>🔄 Venditore:</b> {condition}\n\n"
     if clean_price:
         msg += f"<b>💰 Prezzo:</b> {clean_price}\n\n"
     if rating_stars:
         msg += f"{rating_stars}\n\n"
+    if review:
+        msg += f"<b>📝 Recensione:</b>\n{review}\n\n"
     if promotion:
         msg += f"<b>🎉 Promozione:</b> {promotion}\n\n"
     if coupon:
@@ -926,10 +1022,21 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("📸 Recupero info prodotto...")
         info = await get_product_info(url, is_amazon=(store_kind == "amazon"))
 
+        await status_msg.edit_text("📝 Scrivo la recensione...")
+        price_line = f"Prezzo: {info.get('price') or 'n/d'}"
+        review = await generate_ai_review(info, price_line)
+
+        # Video: dal sito, altrimenti cercato su YouTube
+        video_url = info.get("video")
+        youtube_url = None
+        if not video_url and info.get("title"):
+            await status_msg.edit_text("🎥 Cerco un video...")
+            youtube_url = await find_youtube_video(info["title"])
+
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_with_yourls(affiliate_url)
 
-        message = build_product_message(info, short_url, user.first_name)
+        message = build_product_message(info, short_url, user.first_name, review=review)
         await status_msg.delete()
         try:
             await update.message.delete()
@@ -937,12 +1044,36 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             pass
 
         chat = update.message.chat
+
+        # 1) Video direttamente dal sito → al posto dell'immagine
+        if video_url:
+            try:
+                await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML)
+                return
+            except Exception as e:
+                logger.warning(f"send_video error: {e}")
+
+        # 2) Video trovato su YouTube → anteprima video al posto dell'immagine
+        if youtube_url:
+            try:
+                await chat.send_message(
+                    f"{message}\n\n🎥 <a href='{youtube_url}'>Guarda il video</a>",
+                    parse_mode=ParseMode.HTML,
+                    link_preview_options=LinkPreviewOptions(url=youtube_url, prefer_large_media=True),
+                )
+                return
+            except Exception as e:
+                logger.warning(f"youtube send error: {e}")
+
+        # 3) Immagine
         if info.get("image"):
             try:
                 await chat.send_photo(photo=info["image"], caption=message, parse_mode=ParseMode.HTML)
                 return
             except Exception as e:
                 logger.warning(f"Photo error: {e}")
+
+        # 4) Solo testo
         await chat.send_message(message, parse_mode=ParseMode.HTML)
 
     except Exception as e:
