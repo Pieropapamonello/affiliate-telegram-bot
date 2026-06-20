@@ -1,0 +1,19 @@
+# Copia in .env e compila (NON committare .env)
+
+# Token del bot Telegram (da @BotFather)
+TELEGRAM_TOKEN=il_tuo_token_telegram
+
+# --- Amazon (tag affiliato nativo) ---
+AFFILIATE_TAG=il_tuo_tag-21
+
+# --- Aggregatore per "qualsiasi store" (scegline UNO) ---
+# Opzione 1 (semplice): Publisher ID Sovrn/Skimlinks
+SKIMLINKS_ID=
+# Opzione 2 (flessibile): template con {url} come segnaposto
+#   es. https://go.skimresources.com/?id=XXXXXX&xs=1&url={url}
+#   es. https://ad.admitad.com/g/CAMPAIGN/?ulp={url}
+DEEPLINK_TEMPLATE=
+
+# --- Accorciatore YOURLS (opzionale) ---
+YOURLS_URL=
+YOURLS_SIGNATURE=
