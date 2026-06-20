@@ -59,7 +59,13 @@ DISCOUNT_THRESHOLD = float(os.environ.get("DISCOUNT_THRESHOLD", 10))  # % calo m
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 
-# AI (Claude) per i testi dei post — opzionale
+# Firestore (Google) per la persistenza della watchlist — opzionale
+FIRESTORE_PROJECT_ID = os.environ.get("FIRESTORE_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
+
+# AI per i testi dei post — opzionale. Provider: Gemini (gratis) o Claude.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_MODEL = os.environ.get("AI_MODEL", "claude-opus-4-8")
 
@@ -71,15 +77,28 @@ if not TELEGRAM_TOKEN:
 if not DEEPLINK_TEMPLATE and SKIMLINKS_ID:
     DEEPLINK_TEMPLATE = f"https://go.skimresources.com/?id={SKIMLINKS_ID}&xs=1&url={{url}}"
 
-# Client AI (creato solo se la chiave è presente)
+# Client AI Claude (creato solo se la chiave è presente e Gemini non è configurato)
 ai_client = None
-if ANTHROPIC_API_KEY:
+if ANTHROPIC_API_KEY and not GEMINI_API_KEY:
     try:
         from anthropic import AsyncAnthropic
 
         ai_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
     except Exception as e:
-        logger.warning(f"AI non disponibile: {e}")
+        logger.warning(f"Claude non disponibile: {e}")
+
+# Firestore (inizializzato in init_firestore)
+firestore_db = None
+USE_FIRESTORE = False
+
+
+def _ai_status() -> str:
+    if GEMINI_API_KEY:
+        return f"Gemini ({GEMINI_MODEL})"
+    if ai_client:
+        return f"Claude ({AI_MODEL})"
+    return "disattivo (template)"
+
 
 logger.info("Bot Configuration:")
 logger.info(f"  TELEGRAM_TOKEN: {TELEGRAM_TOKEN[:10]}...")
@@ -88,8 +107,31 @@ logger.info(f"  Aggregatore: {'attivo' if DEEPLINK_TEMPLATE else 'NON configurat
 logger.info(f"  YOURLS: {'attivo' if (YOURLS_URL and YOURLS_SIGNATURE) else 'disattivo'}")
 logger.info(f"  Canale auto-post: {CHANNEL_ID or '(non impostato)'}")
 logger.info(f"  Monitor prezzi: ogni {CHECK_INTERVAL_MIN} min, soglia {DISCOUNT_THRESHOLD}%")
-logger.info(f"  AI copy: {'attivo (' + AI_MODEL + ')' if ai_client else 'disattivo'}")
+logger.info(f"  AI copy: {_ai_status()}")
+logger.info(f"  DB: {'Firestore' if (FIRESTORE_PROJECT_ID or GOOGLE_CREDENTIALS_JSON) else 'file JSON'}")
 logger.info(f"  PORT: {PORT}")
+
+
+def init_firestore():
+    """Inizializza Firestore se sono presenti le credenziali."""
+    global firestore_db, USE_FIRESTORE
+    if not (GOOGLE_CREDENTIALS_JSON or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")):
+        return
+    try:
+        from google.cloud import firestore
+        from google.oauth2 import service_account
+
+        if GOOGLE_CREDENTIALS_JSON:
+            info = json.loads(GOOGLE_CREDENTIALS_JSON)
+            creds = service_account.Credentials.from_service_account_info(info)
+            project = FIRESTORE_PROJECT_ID or info.get("project_id")
+            firestore_db = firestore.Client(project=project, credentials=creds)
+        else:
+            firestore_db = firestore.Client(project=FIRESTORE_PROJECT_ID or None)
+        USE_FIRESTORE = True
+        logger.info("Firestore attivo")
+    except Exception as e:
+        logger.warning(f"Firestore non disponibile, uso file JSON: {e}")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -431,22 +473,55 @@ async def shorten_with_yourls(url: str) -> str:
 # ----------------------------------------------------------------------------
 # AI copywriting (Claude)
 # ----------------------------------------------------------------------------
+AI_SYSTEM_PROMPT = (
+    "Sei un copywriter per un canale Telegram di offerte e affiliazione. "
+    "Scrivi un post breve (massimo 500 caratteri), accattivante, in italiano, "
+    "con qualche emoji, che invogli all'acquisto e crei urgenza in modo onesto. "
+    "Inserisci il link così com'è (verrà reso cliccabile da Telegram). "
+    "Rispondi SOLO con il testo del post, senza virgolette né spiegazioni."
+)
+
+
 async def generate_ai_copy(info: dict, price_line: str, link: str) -> str:
-    if not ai_client:
-        return None
-    system = (
-        "Sei un copywriter per un canale Telegram di offerte e affiliazione. "
-        "Scrivi un post breve (massimo 500 caratteri), accattivante, in italiano, "
-        "con qualche emoji, che invogli all'acquisto e crei urgenza in modo onesto. "
-        "Inserisci il link così com'è (verrà reso cliccabile da Telegram). "
-        "Rispondi SOLO con il testo del post, senza virgolette né spiegazioni."
-    )
     user = (
         f"Prodotto: {info.get('title') or 'Prodotto in offerta'}\n"
         f"{price_line}\n"
         f"Valutazione: {info.get('rating') or 'n/d'}\n"
         f"Link: {link}"
     )
+    if GEMINI_API_KEY:
+        return await _gemini_copy(AI_SYSTEM_PROMPT, user)
+    if ai_client:
+        return await _claude_copy(AI_SYSTEM_PROMPT, user)
+    return None
+
+
+async def _gemini_copy(system: str, user: str) -> str:
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"maxOutputTokens": 400, "temperature": 0.9},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(url, json=payload)
+            data = r.json()
+            if "candidates" not in data:
+                logger.error(f"Gemini response: {str(data)[:300]}")
+                return None
+            parts = data["candidates"][0]["content"]["parts"]
+            text = "".join(p.get("text", "") for p in parts)
+            return text.strip() or None
+    except Exception as e:
+        logger.error(f"Gemini copy error: {e}")
+        return None
+
+
+async def _claude_copy(system: str, user: str) -> str:
     try:
         resp = await ai_client.messages.create(
             model=AI_MODEL,
@@ -457,7 +532,7 @@ async def generate_ai_copy(info: dict, price_line: str, link: str) -> str:
         text = next((b.text for b in resp.content if b.type == "text"), None)
         return text.strip() if text else None
     except Exception as e:
-        logger.error(f"AI copy error: {e}")
+        logger.error(f"Claude copy error: {e}")
         return None
 
 
@@ -503,6 +578,13 @@ def build_product_message(info: dict, short_url: str, user_name: str = None) -> 
 # Watchlist (persistenza su file JSON)
 # ----------------------------------------------------------------------------
 def load_watchlist() -> list:
+    if USE_FIRESTORE:
+        try:
+            doc = firestore_db.collection("bot").document("watchlist").get()
+            return doc.to_dict().get("items", []) if doc.exists else []
+        except Exception as e:
+            logger.error(f"Firestore load error: {e}")
+            return []
     try:
         with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -511,6 +593,13 @@ def load_watchlist() -> list:
 
 
 def save_watchlist(wl: list) -> None:
+    if USE_FIRESTORE:
+        try:
+            firestore_db.collection("bot").document("watchlist").set({"items": wl})
+            return
+        except Exception as e:
+            logger.error(f"Firestore save error: {e}")
+            return
     try:
         with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
             json.dump(wl, f, ensure_ascii=False, indent=2)
@@ -779,6 +868,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 def main():
     start_health_check_server()
+    init_firestore()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
