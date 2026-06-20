@@ -56,6 +56,8 @@ PAAPI_HOST = os.environ.get("PAAPI_HOST", "https://creatorsapi.amazon")
 # Aggregatore per "qualsiasi store".
 SKIMLINKS_ID = os.environ.get("SKIMLINKS_ID", "")
 DEEPLINK_TEMPLATE = os.environ.get("DEEPLINK_TEMPLATE", "")
+# Se true, anche i link Amazon passano da Skimlinks (uniforme) invece del tag nativo
+ROUTE_ALL_VIA_SKIMLINKS = os.environ.get("ROUTE_ALL_VIA_SKIMLINKS", "").lower() in ("1", "true", "yes", "si")
 
 # Accorciatore YOURLS (opzionale)
 YOURLS_URL = os.environ.get("YOURLS_URL", "").rstrip("/")
@@ -234,6 +236,33 @@ def extract_first_url(text: str) -> str:
     return None
 
 
+# Domini NON-ecommerce: i loro link vengono ignorati (utile nei gruppi)
+NON_SHOP_DOMAINS = [
+    "tiktok.com", "youtube.com", "youtu.be", "instagram.com", "facebook.com", "fb.watch",
+    "fb.com", "twitter.com", "x.com", "t.me", "telegram.me", "telegram.org", "reddit.com",
+    "wikipedia.org", "google.", "bing.com", "spotify.com", "twitch.tv", "linkedin.com",
+    "pinterest.", "whatsapp.com", "wa.me", "vimeo.com", "threads.net", "discord.",
+    "tumblr.com", "snapchat.com", "soundcloud.com", "medium.com", "paypal.",
+]
+
+
+def is_shop_url(url: str) -> bool:
+    """True se il link sembra di un e-commerce (non social/video/messaggistica)."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        if not host:
+            return False
+        if any(b in host for b in NON_SHOP_DOMAINS):
+            return False
+        # Deve avere un percorso (non solo la home del sito)
+        if parsed.path in ("", "/"):
+            return is_amazon_url(url)
+        return True
+    except Exception:
+        return False
+
+
 def is_amazon_url(url: str) -> bool:
     try:
         domain = urlparse(url).netloc.lower().replace("www.", "")
@@ -306,12 +335,18 @@ def add_amazon_tag(url: str, tag: str) -> str:
 
 def build_affiliate_link(url: str) -> tuple:
     """Ritorna (affiliate_url, store_kind). store_kind in {amazon, aggregator, none}."""
-    if is_amazon_url(url):
+    amazon = is_amazon_url(url)
+    # Amazon nativo (tag) salvo che si voglia far passare tutto da Skimlinks
+    if amazon and not (ROUTE_ALL_VIA_SKIMLINKS and DEEPLINK_TEMPLATE):
         normalized = normalize_amazon_url(url)
         return add_amazon_tag(normalized, AFFILIATE_TAG), "amazon"
     if DEEPLINK_TEMPLATE:
-        affiliate = DEEPLINK_TEMPLATE.replace("{url}", quote_plus(url))
+        target = normalize_amazon_url(url) if amazon else url
+        affiliate = DEEPLINK_TEMPLATE.replace("{url}", quote_plus(target))
         return affiliate, "aggregator"
+    if amazon:  # nessun aggregatore: ripiego sul tag nativo
+        normalized = normalize_amazon_url(url)
+        return add_amazon_tag(normalized, AFFILIATE_TAG), "amazon"
     return url, "none"
 
 
@@ -558,7 +593,49 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
     info["video"] = extract_page_video(soup)
     info["source"] = store_name_from_url(url)
     info["price"] = meta_content(soup, "product:price:amount") or meta_content(soup, "og:price:amount")
+
+    # Fallback dati da JSON-LD (schema.org Product)
+    ld = extract_jsonld_product(soup)
+    if ld:
+        info["title"] = info["title"] or ld.get("title")
+        info["image"] = info["image"] or ld.get("image")
+        if not info["price"] and ld.get("price"):
+            cur = ld.get("currency") or "€"
+            info["price"] = f"{ld['price']}{cur if cur == '€' else ' ' + cur}"
     return info
+
+
+def extract_jsonld_product(soup) -> dict:
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(tag.string or "{}")
+        except Exception:
+            continue
+        candidates = data if isinstance(data, list) else [data]
+        if isinstance(data, dict) and isinstance(data.get("@graph"), list):
+            candidates = data["@graph"]
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("@type")
+            is_product = t == "Product" or (isinstance(t, list) and "Product" in t)
+            if not is_product:
+                continue
+            offers = c.get("offers") or {}
+            if isinstance(offers, list):
+                offers = offers[0] if offers else {}
+            img = c.get("image")
+            if isinstance(img, list):
+                img = img[0] if img else None
+            if isinstance(img, dict):
+                img = img.get("url")
+            return {
+                "title": c.get("name"),
+                "image": img,
+                "price": offers.get("price") if isinstance(offers, dict) else None,
+                "currency": offers.get("priceCurrency") if isinstance(offers, dict) else None,
+            }
+    return None
 
 
 def _iso8601_to_seconds(s: str) -> int:
@@ -798,10 +875,10 @@ AI_SYSTEM_PROMPT = (
 
 
 REVIEW_SYSTEM_PROMPT = (
-    "Sei un esperto di recensioni prodotti. Scrivi una mini-recensione onesta e utile "
-    "di ESATTAMENTE 3 righe brevi in italiano. Non inventare specifiche tecniche che non conosci: "
-    "parla dei vantaggi tipici di questo tipo di prodotto e per chi è adatto. "
-    "Niente emoji eccessive. Rispondi SOLO con la recensione, senza titoli né virgolette."
+    "Sei un esperto di recensioni prodotti. Scrivi una mini-recensione onesta e utile, "
+    "MOLTO breve: massimo 3 righe e non oltre 180 caratteri totali, in italiano. "
+    "Vai dritto al punto: a chi è adatto e il vantaggio principale. "
+    "Non inventare specifiche tecniche. Niente emoji. Rispondi SOLO con la recensione, senza titoli né virgolette."
 )
 
 
@@ -823,7 +900,7 @@ async def generate_ai_review(info: dict, price_line: str) -> str:
         f"{price_line}\n"
         f"Valutazione: {info.get('rating') or 'n/d'}"
     )
-    return await _ai_complete(REVIEW_SYSTEM_PROMPT, user, 220)
+    return await _ai_complete(REVIEW_SYSTEM_PROMPT, user, 130)
 
 
 async def _ai_complete(system: str, user: str, max_tokens: int = 400) -> str:
@@ -952,7 +1029,10 @@ def build_product_message(info: dict, short_url: str, user_name: str = None, rev
     if rating_stars:
         msg += f"{rating_stars}\n\n"
     if review:
-        msg += f"<b>📝 Recensione:</b>\n{max_lines(review, 3)}\n\n"
+        rev = max_lines(review, 3, line_len=70)
+        if len(rev) > 200:
+            rev = rev[:200].rsplit(" ", 1)[0] + "…"
+        msg += f"<b>📝 Recensione:</b>\n{rev}\n\n"
     if promotion:
         msg += f"<b>🎉 Promozione:</b> {promotion}\n\n"
     if coupon:
@@ -1219,6 +1299,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     original_url = extract_first_url(text)
     if not original_url:
+        return
+
+    # Nei gruppi: ignora link non-ecommerce (tiktok, youtube, social, ecc.)
+    if not is_shop_url(original_url):
+        logger.info(f"Link ignorato (non e-commerce): {original_url}")
         return
 
     status_msg = await update.message.reply_text("⏳ Elaborando...")
