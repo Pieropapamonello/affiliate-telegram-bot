@@ -1332,7 +1332,8 @@ def load_settings() -> dict:
             data = doc.to_dict() if doc.exists else {}
         except Exception as e:
             logger.error(f"settings load error: {e}")
-            data = _settings_cache["data"] or {}
+            # In caso di errore NON sovrascrivo la cache: ritorno l'ultimo valore buono
+            return _settings_cache["data"] or {}
     else:
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -1641,24 +1642,17 @@ async def scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
 # Handlers comandi
 # ----------------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    welcome = (
-        "👋 Ciao! Sono il tuo Bot Offerte & Affiliazione.\n\n"
-        "🔗 Inviami il link di un prodotto (Amazon o altri store) e ti do il link affiliato.\n\n"
-        "🤖 Funzioni di automazione (admin):\n"
-        "• /watch <link> [prezzo] – monitora un prodotto e avvisa al calo\n"
-        "• /list – mostra i prodotti monitorati\n"
-        "• /unwatch <numero> – rimuovi dalla lista\n"
-        "• /deal <link> – pubblica subito un'offerta\n\n"
-        "⚙️ Configurazione (admin):\n"
-        "• /admin <password> – diventa admin\n"
-        "• /setchannel <@canale|id> – dove pubblicare le offerte\n"
-        "• /config – stato configurazione\n"
-        "• /id – mostra il tuo id\n"
-    )
     if is_admin(update.effective_user.id):
-        await update.message.reply_text(welcome, reply_markup=ADMIN_KEYBOARD)
+        await update.message.reply_text(
+            "👋 <b>Pannello admin</b>\nUsa i pulsanti qui sotto per gestire il bot. 👇",
+            reply_markup=ADMIN_KEYBOARD,
+            parse_mode=ParseMode.HTML,
+        )
     else:
-        await update.message.reply_text(welcome)
+        await update.message.reply_text(
+            "👋 Ciao! Inviami il link di un prodotto (Amazon o altri store) "
+            "e ti restituisco il link affiliato pronto da condividere. 🛒"
+        )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1757,8 +1751,8 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _deny_if_not_admin(update: Update) -> bool:
-    """True se l'utente NON è autorizzato (admin esistono e lui non lo è)."""
-    return admins_exist() and not is_admin(update.effective_user.id)
+    """True se l'utente NON è admin. (Per diventarlo: /admin <password>.)"""
+    return not is_admin(update.effective_user.id)
 
 
 async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2193,20 +2187,20 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("📸 Recupero info prodotto...")
         info = await get_product_info(url, is_amazon=(store_kind == "amazon"))
 
-        await status_msg.edit_text("📝 Scrivo la recensione...")
         price_f = parse_price_to_float(info.get("price"))
-        review = await generate_ai_review(info, f"Prezzo: {info.get('price') or 'n/d'}")
+        # Recensione AI solo se ho letto un titolo reale (evita testi generici/fuffa)
+        has_real_title = bool(info.get("title")) and len(info.get("title") or "") > 5
+        review = None
+        if has_real_title:
+            await status_msg.edit_text("📝 Scrivo la recensione...")
+            review = await generate_ai_review(info, f"Prezzo: {info.get('price') or 'n/d'}")
 
         # Minimo storico
         hist = record_observation(url, price_f)
         price_line = build_price_line(price_f, hist) if price_f is not None else (info.get("price") or "")
 
-        # Video: dal sito, altrimenti cercato su YouTube (se attivo e pertinente)
+        # Video nativo SOLO se il sito espone un file video (no link esterni YouTube)
         video_url = info.get("video") if video_enabled() else None
-        youtube_url = None
-        if video_enabled() and not video_url and info.get("title"):
-            await status_msg.edit_text("🎥 Cerco un video...")
-            youtube_url = await find_youtube_video(info["title"])
 
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
@@ -2221,7 +2215,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         chat = update.message.chat
 
-        # 1) Video dal sito → nativo, al posto dell'immagine
+        # 1) Video nativo dal sito (se presente) → al posto dell'immagine
         if video_url:
             try:
                 await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
@@ -2229,20 +2223,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception as e:
                 logger.warning(f"send_video error: {e}")
 
-        # 2) Video YouTube pertinente → anteprima grande + bottone acquista
-        if youtube_url:
-            try:
-                await chat.send_message(
-                    f"{message}\n\n🎥 <a href='{youtube_url}'>Guarda il video</a>",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=kb,
-                    link_preview_options=LinkPreviewOptions(url=youtube_url, prefer_large_media=True),
-                )
-                return
-            except Exception as e:
-                logger.warning(f"youtube send error: {e}")
-
-        # 3) Foto personalizzata (card) se attiva, altrimenti immagine prodotto
+        # 2) Card personalizzata (foto brandizzata) se attiva, altrimenti immagine prodotto
         photo = await get_post_photo(info)
         if photo:
             try:
@@ -2251,7 +2232,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception as e:
                 logger.warning(f"Photo error: {e}")
 
-        # 4) Solo testo
+        # 3) Solo testo
         await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
 
     except Exception as e:
