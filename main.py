@@ -288,13 +288,34 @@ def is_short_url(url: str) -> bool:
 
 
 async def resolve_short_url(url: str) -> str:
-    for user_agent in USER_AGENTS:
-        try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                response = await client.get(url, headers={"User-Agent": user_agent})
-                return str(response.url)
-        except Exception:
-            continue
+    headers = {"User-Agent": USER_AGENTS[0], "Accept-Language": "it-IT,it;q=0.9"}
+    # 1) Tentativo standard: segui i redirect e prendi l'URL finale
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers=headers) as client:
+            response = await client.get(url)
+            final = str(response.url)
+            if final and not is_short_url(final):
+                logger.info(f"Resolved {url} -> {final}")
+                return final
+    except Exception as e:
+        logger.warning(f"resolve error: {e}")
+    # 2) Fallback: segui i redirect manualmente leggendo gli header Location
+    try:
+        cur = url
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False, headers=headers) as client:
+            for _ in range(6):
+                r = await client.get(cur)
+                loc = r.headers.get("location")
+                if r.status_code in (301, 302, 303, 307, 308) and loc:
+                    cur = loc if loc.startswith("http") else str(httpx.URL(cur).join(loc))
+                    if not is_short_url(cur):
+                        break
+                else:
+                    break
+        logger.info(f"Resolved (manual) {url} -> {cur}")
+        return cur
+    except Exception as e:
+        logger.warning(f"resolve manual error: {e}")
     return url
 
 
