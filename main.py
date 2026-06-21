@@ -1154,10 +1154,13 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def _gradient(w: int, h: int):
-    from PIL import Image, ImageDraw
+ACCENT = (255, 138, 0)
 
-    top, bot = (38, 40, 54), (12, 12, 18)
+
+def _gradient(w: int, h: int):
+    from PIL import Image, ImageDraw, ImageFilter
+
+    top, bot = (32, 36, 58), (10, 11, 16)
     base = Image.new("RGB", (w, h), top)
     d = ImageDraw.Draw(base)
     for y in range(h):
@@ -1165,61 +1168,125 @@ def _gradient(w: int, h: int):
         g = int(top[1] + (bot[1] - top[1]) * y / h)
         b = int(top[2] + (bot[2] - top[2]) * y / h)
         d.line([(0, y), (w, y)], fill=(r, g, b))
-    return base
+    # bagliore accento in alto
+    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse([w * 0.05, -h * 0.3, w * 0.95, h * 0.35], fill=ACCENT + (60,))
+    glow = glow.filter(ImageFilter.GaussianBlur(130))
+    return Image.alpha_composite(base.convert("RGBA"), glow).convert("RGB")
 
 
-def _compose_card(img_bytes: bytes, store: str, brand_text: str, bg_bytes: bytes = None) -> bytes:
-    from PIL import Image, ImageDraw, ImageOps
+def _rounded(size, radius, fill):
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(img).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=fill)
+    return img
+
+
+def _chip(draw, bg, xy, text, font, color, text_color=(255, 255, 255), pad=20, h=60, radius=18):
+    tw = draw.textlength(text, font=font)
+    chip = _rounded((int(tw + 2 * pad), h), radius, color + (255,))
+    bg.paste(chip, (int(xy[0]), int(xy[1])), chip)
+    draw.text((xy[0] + pad, xy[1] + (h - font.size) / 2 - 2), text, font=font, fill=text_color)
+    return int(tw + 2 * pad)
+
+
+def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_price=None, is_min=False) -> bytes:
+    from PIL import Image, ImageDraw, ImageOps, ImageFilter
 
     W = H = 1080
     # Sfondo
     if bg_bytes:
         try:
             bg = ImageOps.fit(Image.open(io.BytesIO(bg_bytes)).convert("RGB"), (W, H))
-            bg = Image.blend(bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.45)
+            bg = Image.blend(bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.5)
         except Exception:
             bg = _gradient(W, H)
     else:
         bg = _gradient(W, H)
 
-    # Prodotto su card bianca arrotondata
+    # Prodotto + ombra
     prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    prod.thumbnail((760, 620))
-    pad = 30
+    prod.thumbnail((680, 520))
+    pad = 36
     cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
-    card = Image.new("RGBA", (cw, ch), (255, 255, 255, 255))
+    cx, cy = (W - cw) // 2, 175
+    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=46, fill=(0, 0, 0, 170)
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(24))
+    bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
+    card = _rounded((cw, ch), 46, (255, 255, 255, 255))
     card.paste(prod, (pad, pad), prod)
-    mask = Image.new("L", (cw, ch), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, cw, ch], radius=40, fill=255)
-    cx, cy = (W - cw) // 2, 150
-    bg.paste(card, (cx, cy), mask)
+    bg.paste(card, (cx, cy), card)
 
     draw = ImageDraw.Draw(bg)
-    # Scritta brand sotto al prodotto
+
+    # Badge store (in alto a sinistra)
+    if store:
+        col = STORE_COLORS.get(store, ACCENT)
+        _chip(draw, bg, (64, 64), store.upper(), _font(38), col, h=64, radius=20)
+
+    # Sticker prezzo (in alto a destra)
+    if price is not None:
+        fbig = _font(64)
+        ptext = f"{price:.2f}€"
+        pw = draw.textlength(ptext, font=fbig)
+        disc = None
+        if old_price and old_price > price:
+            disc = f"-{round((1 - price / old_price) * 100)}%"
+        fdisc = _font(34)
+        sw = int(max(pw, draw.textlength(disc or "", font=fdisc)) + 56)
+        sh = 132 if disc else 96
+        sx, sy = W - sw - 64, 60
+        sticker = _rounded((sw, sh), 26, ((229, 57, 53, 255) if disc else ACCENT + (255,)))
+        bg.paste(sticker, (sx, sy), sticker)
+        ty = sy + 16
+        if disc:
+            dw = draw.textlength(disc, font=fdisc)
+            draw.text((sx + (sw - dw) / 2, ty), disc, font=fdisc, fill=(255, 255, 255))
+            ty += 44
+        draw.text((sx + (sw - pw) / 2, ty), ptext, font=fbig, fill=(255, 255, 255))
+        if disc:
+            fo = _font(30)
+            ot = f"{old_price:.2f}€"
+            ow = draw.textlength(ot, font=fo)
+            oy = sy + sh + 8
+            draw.text((sx + (sw - ow) / 2, oy), ot, font=fo, fill=(210, 210, 210))
+            draw.line([sx + (sw - ow) / 2, oy + 19, sx + (sw + ow) / 2, oy + 19], fill=(210, 210, 210), width=3)
+
+    # Ribbon "MINIMO STORICO"
+    y_after = cy + ch + 36
+    if is_min:
+        fr = _font(36)
+        rt = "MINIMO STORICO"
+        rw = draw.textlength(rt, font=fr)
+        rp = 24
+        rx = (W - (rw + 2 * rp)) // 2
+        rib = _rounded((int(rw + 2 * rp), 60), 16, (229, 57, 53, 255))
+        bg.paste(rib, (int(rx), int(y_after)), rib)
+        draw.text((rx + rp, y_after + 12), rt, font=fr, fill=(255, 255, 255))
+        y_after += 84
+
+    # Footer brand + riga accento
     bt = brand_text or ""
     if bt:
-        f = _font(72)
+        f = _font(74)
         tw = draw.textlength(bt, font=f)
-        ty = cy + ch + 55
-        draw.text(((W - tw) / 2 + 3, ty + 3), bt, font=f, fill=(0, 0, 0))
-        draw.text(((W - tw) / 2, ty), bt, font=f, fill=(255, 255, 255))
-
-    # Badge store in alto a sinistra
-    if store:
-        badge = store.upper()
-        fb = _font(40)
-        bw = draw.textlength(badge, font=fb)
-        p = 22
-        col = STORE_COLORS.get(store, (33, 150, 243))
-        draw.rounded_rectangle([40, 40, 40 + bw + 2 * p, 106], radius=20, fill=col)
-        draw.text((40 + p, 52), badge, font=fb, fill=(255, 255, 255))
+        bx = (W - tw) / 2
+        draw.text((bx + 3, y_after + 3), bt, font=f, fill=(0, 0, 0))
+        draw.text((bx, y_after), bt, font=f, fill=(255, 255, 255))
+        uw = min(tw, 540)
+        uy = y_after + 92
+        draw.rounded_rectangle([(W - uw) / 2, uy, (W + uw) / 2, uy + 9], radius=4, fill=ACCENT)
 
     out = io.BytesIO()
-    bg.convert("RGB").save(out, "JPEG", quality=88)
+    bg.convert("RGB").save(out, "JPEG", quality=90)
     return out.getvalue()
 
 
-async def generate_card_image(image_url: str, store: str, brand_text: str) -> bytes:
+async def generate_card_image(image_url, store, brand_text, price=None, old_price=None, is_min=False) -> bytes:
     if not image_url:
         return None
     img = await fetch_bytes(image_url)
@@ -1230,16 +1297,18 @@ async def generate_card_image(image_url: str, store: str, brand_text: str) -> by
     if bgurl:
         bg = await fetch_bytes(bgurl)
     try:
-        return await asyncio.to_thread(_compose_card, img, store, brand_text, bg)
+        return await asyncio.to_thread(_compose_card, img, store, brand_text, bg, price, old_price, is_min)
     except Exception as e:
         logger.warning(f"card image error: {e}")
         return None
 
 
-async def get_post_photo(info: dict):
-    """Ritorna i byte della card personalizzata se attiva, altrimenti l'URL immagine, altrimenti None."""
+async def get_post_photo(info: dict, price=None, old_price=None, is_min=False):
+    """Card personalizzata (byte) se attiva, altrimenti URL immagine, altrimenti None."""
     if card_enabled() and info.get("image"):
-        card = await generate_card_image(info.get("image"), info.get("source"), get_brand_text())
+        card = await generate_card_image(
+            info.get("image"), info.get("source"), get_brand_text(), price, old_price, is_min
+        )
         if card:
             return card
     return info.get("image")
@@ -1554,7 +1623,7 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
 
     destination = get_post_channel() or entry.get("chat_id")
     kb = buy_button(short_url)
-    photo = await get_post_photo(info)
+    photo = await get_post_photo(info, price=current_price, old_price=old_price, is_min=hist.get("is_new_min"))
 
     ai_text = await generate_ai_copy(info, f"Prezzo: {price_line}", short_url)
     if ai_text:
@@ -2233,7 +2302,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 logger.warning(f"send_video error: {e}")
 
         # 2) Card personalizzata (foto brandizzata) se attiva, altrimenti immagine prodotto
-        photo = await get_post_photo(info)
+        photo = await get_post_photo(info, price=price_f, is_min=hist.get("is_new_min"))
         if photo:
             try:
                 await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
