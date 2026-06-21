@@ -59,7 +59,8 @@ DEEPLINK_TEMPLATE = os.environ.get("DEEPLINK_TEMPLATE", "")
 # Se true, anche i link Amazon passano da Skimlinks (uniforme) invece del tag nativo
 ROUTE_ALL_VIA_SKIMLINKS = os.environ.get("ROUTE_ALL_VIA_SKIMLINKS", "").lower() in ("1", "true", "yes", "si")
 
-# Accorciatore YOURLS (opzionale)
+# Accorciatori link (opzionali). Bitly con rotazione di più token, poi YOURLS, poi is.gd.
+BITLY_TOKENS = [t.strip() for t in os.environ.get("BITLY_TOKENS", "").split(",") if t.strip()]
 YOURLS_URL = os.environ.get("YOURLS_URL", "").rstrip("/")
 YOURLS_SIGNATURE = os.environ.get("YOURLS_SIGNATURE", "")
 
@@ -137,6 +138,8 @@ logger.info(f"  AI copy: {_ai_status()}")
 logger.info(f"  DB: {'Firestore' if (FIRESTORE_PROJECT_ID or GOOGLE_CREDENTIALS_JSON) else 'file JSON'}")
 logger.info(f"  Realtime DB: {'attivo' if (RTDB_URL and GOOGLE_CREDENTIALS_JSON) else 'disattivo'}")
 logger.info(f"  Amazon PA-API: {'configurata' if (PAAPI_CLIENT_ID and PAAPI_CLIENT_SECRET) else 'disattiva (scraping)'}")
+_short = "Bitly" if BITLY_TOKENS else ("YOURLS" if (YOURLS_URL and YOURLS_SIGNATURE) else "is.gd")
+logger.info(f"  Accorciatore: {_short} ({len(BITLY_TOKENS)} token Bitly)")
 logger.info(f"  PORT: {PORT}")
 
 
@@ -848,8 +851,33 @@ async def shorten_with_yourls(url: str) -> str:
         return url
 
 
+async def _bitly_shorten(url: str) -> str:
+    """Accorcia con Bitly provando i token in ordine (rotazione su quota esaurita)."""
+    for tok in BITLY_TOKENS:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.post(
+                    "https://api-ssl.bitly.com/v4/shorten",
+                    headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+                    json={"long_url": url},
+                )
+                if r.status_code in (200, 201):
+                    link = r.json().get("link")
+                    if link:
+                        return link
+                else:
+                    logger.warning(f"Bitly token KO {r.status_code}: {r.text[:120]}")
+        except Exception as e:
+            logger.warning(f"Bitly error: {e}")
+    return None
+
+
 async def shorten_url(url: str) -> str:
-    """Accorcia un link: prima YOURLS (se attivo), poi fallback gratuito is.gd."""
+    """Accorcia un link: Bitly (rotazione token) -> YOURLS -> is.gd. L'affiliazione resta nel link."""
+    if BITLY_TOKENS:
+        b = await _bitly_shorten(url)
+        if b:
+            return b
     if YOURLS_URL and YOURLS_SIGNATURE:
         short = await shorten_with_yourls(url)
         if short and short != url:
