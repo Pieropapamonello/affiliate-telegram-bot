@@ -730,65 +730,69 @@ IT_STOPWORDS = {
 }
 
 
-def _keywords(title: str) -> list:
-    words = re.findall(r"[a-zA-Z0-9àèéìòùç]+", (title or "").lower())
-    return [w for w in words if len(w) >= 4 and not w.isdigit() and w not in IT_STOPWORDS]
+SPEC_WORDS = {
+    "pro", "plus", "max", "mini", "lite", "android", "ios", "wifi", "bluetooth",
+    "lumen", "lumens", "smart", "tv", "led", "rgb", "usb", "hd", "uhd", "4k", "8k",
+    "tragbarer", "projektor", "custodia", "cover", "case", "set", "kit", "new",
+    "originale", "version", "edition", "gaming", "wireless",
+}
+
+
+def _norm_tokens(s: str) -> list:
+    return re.findall(r"[a-z0-9]+", (s or "").lower())
 
 
 def _video_is_relevant(product_title: str, video_title: str) -> bool:
-    pk = _keywords(product_title)
-    if not pk:
+    """Match SEVERO: brand del prodotto + (numero di modello OR 2 parole distintive) nel titolo video."""
+    ptoks = _norm_tokens(product_title)
+    if not ptoks:
         return False
-    vt = (video_title or "").lower()
-    brand = pk[0]
-    if brand in vt:  # il brand del prodotto compare nel titolo del video
-        return True
-    overlap = sum(1 for w in set(pk[1:6]) if w in vt)  # parole distintive condivise
+    vset = set(_norm_tokens(video_title))
+    if not vset:
+        return False
+    brand = next((t for t in ptoks if len(t) >= 3 and t not in IT_STOPWORDS and t not in SPEC_WORDS), None)
+    if not brand or brand not in vset:
+        return False
+    # token "modello": misti lettera+numero (es. hy300, v3, b0fhbs)
+    models = [t for t in ptoks if len(t) >= 2 and any(c.isdigit() for c in t) and any(c.isalpha() for c in t)]
+    if models:
+        return any(m in vset for m in models)
+    distinct = [t for t in ptoks if len(t) >= 4 and t not in IT_STOPWORDS and t not in SPEC_WORDS and not t.isdigit()]
+    overlap = sum(1 for t in dict.fromkeys(distinct[:6]) if t in vset)
     return overlap >= 2
 
 
 def _clean_query(title: str) -> str:
-    words = re.split(r"[\s,;:-]+", title or "")
+    words = re.split(r"[\s,;:/|]+", title or "")
     return " ".join(w for w in words if len(w) > 1)[:80]
 
 
 async def find_youtube_video(title: str) -> str:
-    """Trova un video YouTube CORTO (<VIDEO_MAX_SECONDS) e PERTINENTE via API ufficiale.
-    Se nessun risultato è abbastanza pertinente, ritorna None (meglio niente che un video sbagliato)."""
+    """Trova una VIDEO-RECENSIONE pertinente (match severo): prima IT, poi EN.
+    Ritorna None se nessun risultato è esattamente sul prodotto (meglio niente)."""
     if not (title and YOUTUBE_API_KEY):
         return None
-    query = _clean_query(title)
+    base = _clean_query(title)
+    attempts = [("it", f"{base} recensione", "IT"), ("en", f"{base} review", None)]
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            s = await client.get(
-                "https://www.googleapis.com/youtube/v3/search",
-                params={
+            for lang, q, region in attempts:
+                params = {
                     "key": YOUTUBE_API_KEY,
                     "part": "snippet",
-                    "q": query,
+                    "q": q,
                     "type": "video",
-                    "maxResults": 8,
-                    "videoDuration": "short",
-                    "relevanceLanguage": "it",
-                },
-            )
-            sd = s.json()
-            titles = {}
-            for it in sd.get("items", []):
-                vid = it.get("id", {}).get("videoId")
-                if vid:
-                    titles[vid] = it.get("snippet", {}).get("title", "")
-            if not titles:
-                return None
-            v = await client.get(
-                "https://www.googleapis.com/youtube/v3/videos",
-                params={"key": YOUTUBE_API_KEY, "part": "contentDetails", "id": ",".join(titles.keys())},
-            )
-            vd = v.json()
-            for it in vd.get("items", []):
-                dur = _iso8601_to_seconds(it.get("contentDetails", {}).get("duration"))
-                if dur and dur <= VIDEO_MAX_SECONDS and _video_is_relevant(title, titles.get(it["id"], "")):
-                    return f"https://www.youtube.com/watch?v={it['id']}"
+                    "maxResults": 10,
+                    "relevanceLanguage": lang,
+                }
+                if region:
+                    params["regionCode"] = region
+                s = await client.get("https://www.googleapis.com/youtube/v3/search", params=params)
+                for it in s.json().get("items", []):
+                    vid = it.get("id", {}).get("videoId")
+                    vtitle = it.get("snippet", {}).get("title", "")
+                    if vid and _video_is_relevant(title, vtitle):
+                        return f"https://www.youtube.com/watch?v={vid}"
     except Exception as e:
         logger.warning(f"youtube API error: {e}")
     return None
@@ -1655,6 +1659,10 @@ def video_enabled() -> bool:
     return load_settings().get("video_enabled", False)
 
 
+def review_link_enabled() -> bool:
+    return load_settings().get("review_link", True)
+
+
 def card_enabled() -> bool:
     return load_settings().get("card_enabled", True)
 
@@ -1707,11 +1715,17 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
     kb = buy_button(short_url)
     photo = await get_post_photo(info, price=current_price, old_price=old_price, is_min=hist.get("is_new_min"))
 
+    review_link = None
+    if review_link_enabled() and YOUTUBE_API_KEY and info.get("title"):
+        review_link = await find_youtube_video(info["title"])
+
     ai_text = await generate_ai_copy(info, f"Prezzo: {price_line}", short_url)
     if ai_text:
         body = ai_text.replace(short_url, "").strip()
         if hist.get("is_new_min"):
-            body = "🔥 <b>MINIMO STORICO</b>\n" + body
+            body = "🔥 MINIMO STORICO\n" + body
+        if review_link:
+            body += f"\n\n🎥 Recensione: {review_link}"
         if photo:
             try:
                 await bot.send_photo(chat_id=destination, photo=photo, caption=body, reply_markup=kb)
@@ -1725,6 +1739,8 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
 
     # Fallback senza AI
     message = build_product_message(info, user_name=None, price_line=price_line)
+    if review_link:
+        message += f"\n\n🎥 <a href='{review_link}'>Guarda la video-recensione</a>"
     if photo:
         try:
             await bot.send_photo(chat_id=destination, photo=photo, caption=message,
@@ -1963,7 +1979,8 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Card grafica: {'attiva' if card_enabled() else 'disattiva'} (scritta: {get_brand_text()})\n"
         f"AI: {_ai_status()}\n"
         f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}\n"
-        f"Video: {'attivo' if video_enabled() else 'disattivo'}\n"
+        f"Video nativo: {'attivo' if video_enabled() else 'disattivo'}\n"
+        f"Link recensione YT: {'attivo' if review_link_enabled() else 'disattivo'}\n"
         f"Token Bitly: {len(get_bitly_tokens())}",
         parse_mode=ParseMode.HTML,
     )
@@ -2087,6 +2104,23 @@ async def setvideo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     s["video_enabled"] = on
     save_settings(s)
     await update.message.reply_text(f"✅ Video {'attivati' if on else 'disattivati'}.")
+
+
+async def setreview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args or context.args[0].lower() not in ("on", "off"):
+        cur = "attivo" if review_link_enabled() else "disattivo"
+        await update.message.reply_text(
+            f"Link video-recensione: <b>{cur}</b>\nUso: /setreview on|off", parse_mode=ParseMode.HTML
+        )
+        return
+    on = context.args[0].lower() == "on"
+    s = load_settings()
+    s["review_link"] = on
+    save_settings(s)
+    await update.message.reply_text(f"✅ Link video-recensione {'attivato' if on else 'disattivato'}.")
 
 
 async def setbrand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2387,10 +2421,18 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Video nativo SOLO se il sito espone un file video (no link esterni YouTube)
         video_url = info.get("video") if video_enabled() else None
 
+        # Link a video-recensione YouTube (match severo: solo se è esattamente quel prodotto)
+        review_link = None
+        if has_real_title and review_link_enabled() and YOUTUBE_API_KEY:
+            await status_msg.edit_text("🎥 Cerco una recensione video...")
+            review_link = await find_youtube_video(info["title"])
+
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
 
         message = build_product_message(info, user_name=user.first_name, review=review, price_line=price_line)
+        if review_link:
+            message += f"\n\n🎥 <a href='{review_link}'>Guarda la video-recensione</a>"
         kb = buy_button(short_url)
         await status_msg.delete()
         try:
@@ -2445,6 +2487,7 @@ def main():
     app.add_handler(CommandHandler("settag", settag_cmd))
     app.add_handler(CommandHandler("setrouting", setrouting_cmd))
     app.add_handler(CommandHandler("setvideo", setvideo_cmd))
+    app.add_handler(CommandHandler("setreview", setreview_cmd))
     app.add_handler(CommandHandler("setmerchant", setmerchant_cmd))
     app.add_handler(CommandHandler("merchants", merchants_cmd))
     app.add_handler(CommandHandler("delmerchant", delmerchant_cmd))
