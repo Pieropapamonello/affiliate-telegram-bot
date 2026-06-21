@@ -677,14 +677,38 @@ def _iso8601_to_seconds(s: str) -> int:
     return h * 3600 + mi * 60 + se
 
 
+IT_STOPWORDS = {
+    "per", "con", "di", "da", "del", "della", "dei", "delle", "degli", "il", "lo", "la",
+    "le", "gli", "un", "una", "uno", "in", "su", "e", "a", "o", "the", "and", "of",
+    "pezzi", "set", "confezione", "colore", "nero", "bianco", "misura", "taglia",
+}
+
+
+def _keywords(title: str) -> list:
+    words = re.findall(r"[a-zA-Z0-9àèéìòùç]+", (title or "").lower())
+    return [w for w in words if len(w) >= 4 and not w.isdigit() and w not in IT_STOPWORDS]
+
+
+def _video_is_relevant(product_title: str, video_title: str) -> bool:
+    pk = _keywords(product_title)
+    if not pk:
+        return False
+    vt = (video_title or "").lower()
+    brand = pk[0]
+    if brand in vt:  # il brand del prodotto compare nel titolo del video
+        return True
+    overlap = sum(1 for w in set(pk[1:6]) if w in vt)  # parole distintive condivise
+    return overlap >= 2
+
+
 def _clean_query(title: str) -> str:
-    # Primi termini significativi del titolo (evita la coda marketing lunghissima)
     words = re.split(r"[\s,;:-]+", title or "")
     return " ".join(w for w in words if len(w) > 1)[:80]
 
 
 async def find_youtube_video(title: str) -> str:
-    """Trova un video YouTube pertinente e CORTO (<VIDEO_MAX_SECONDS) via API ufficiale."""
+    """Trova un video YouTube CORTO (<VIDEO_MAX_SECONDS) e PERTINENTE via API ufficiale.
+    Se nessun risultato è abbastanza pertinente, ritorna None (meglio niente che un video sbagliato)."""
     if not (title and YOUTUBE_API_KEY):
         return None
     query = _clean_query(title)
@@ -697,23 +721,27 @@ async def find_youtube_video(title: str) -> str:
                     "part": "snippet",
                     "q": query,
                     "type": "video",
-                    "maxResults": 5,
-                    "videoDuration": "short",  # < 4 min, poi filtriamo a VIDEO_MAX_SECONDS
+                    "maxResults": 8,
+                    "videoDuration": "short",
                     "relevanceLanguage": "it",
                 },
             )
             sd = s.json()
-            ids = [it["id"]["videoId"] for it in sd.get("items", []) if it.get("id", {}).get("videoId")]
-            if not ids:
+            titles = {}
+            for it in sd.get("items", []):
+                vid = it.get("id", {}).get("videoId")
+                if vid:
+                    titles[vid] = it.get("snippet", {}).get("title", "")
+            if not titles:
                 return None
             v = await client.get(
                 "https://www.googleapis.com/youtube/v3/videos",
-                params={"key": YOUTUBE_API_KEY, "part": "contentDetails", "id": ",".join(ids)},
+                params={"key": YOUTUBE_API_KEY, "part": "contentDetails", "id": ",".join(titles.keys())},
             )
             vd = v.json()
             for it in vd.get("items", []):
                 dur = _iso8601_to_seconds(it.get("contentDetails", {}).get("duration"))
-                if dur and dur <= VIDEO_MAX_SECONDS:
+                if dur and dur <= VIDEO_MAX_SECONDS and _video_is_relevant(title, titles.get(it["id"], "")):
                     return f"https://www.youtube.com/watch?v={it['id']}"
     except Exception as e:
         logger.warning(f"youtube API error: {e}")
@@ -1195,6 +1223,10 @@ def route_via_skimlinks() -> bool:
     return ROUTE_ALL_VIA_SKIMLINKS
 
 
+def video_enabled() -> bool:
+    return load_settings().get("video_enabled", True)
+
+
 # ----------------------------------------------------------------------------
 # Pubblicazione offerta (canale o utente)
 # ----------------------------------------------------------------------------
@@ -1448,6 +1480,7 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Routing Amazon: {'Skimlinks' if route_via_skimlinks() else 'tag nativo'}\n"
         f"AI: {_ai_status()}\n"
         f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}\n"
+        f"Video: {'attivo' if video_enabled() else 'disattivo'}\n"
         f"Token Bitly: {len(get_bitly_tokens())}",
         parse_mode=ParseMode.HTML,
     )
@@ -1496,6 +1529,21 @@ async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"✅ Routing Amazon: <b>{'Skimlinks' if via else 'tag nativo (' + (get_affiliate_tag() or 'nessun tag') + ')'}</b>",
         parse_mode=ParseMode.HTML,
     )
+
+
+async def setvideo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args or context.args[0].lower() not in ("on", "off"):
+        cur = "attivo" if video_enabled() else "disattivo"
+        await update.message.reply_text(f"Video: <b>{cur}</b>\nUso: /setvideo on|off", parse_mode=ParseMode.HTML)
+        return
+    on = context.args[0].lower() == "on"
+    s = load_settings()
+    s["video_enabled"] = on
+    save_settings(s)
+    await update.message.reply_text(f"✅ Video {'attivati' if on else 'disattivati'}.")
 
 
 async def addtoken_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1705,10 +1753,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         price_line = f"Prezzo: {info.get('price') or 'n/d'}"
         review = await generate_ai_review(info, price_line)
 
-        # Video: dal sito, altrimenti cercato su YouTube
-        video_url = info.get("video")
+        # Video: dal sito, altrimenti cercato su YouTube (se attivo e pertinente)
+        video_url = info.get("video") if video_enabled() else None
         youtube_url = None
-        if not video_url and info.get("title"):
+        if video_enabled() and not video_url and info.get("title"):
             await status_msg.edit_text("🎥 Cerco un video...")
             youtube_url = await find_youtube_video(info["title"])
 
@@ -1779,6 +1827,7 @@ def main():
     app.add_handler(CommandHandler("cleartokens", cleartokens_cmd))
     app.add_handler(CommandHandler("settag", settag_cmd))
     app.add_handler(CommandHandler("setrouting", setrouting_cmd))
+    app.add_handler(CommandHandler("setvideo", setvideo_cmd))
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
