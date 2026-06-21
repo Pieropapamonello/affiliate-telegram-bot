@@ -427,13 +427,20 @@ async def fetch_html(url: str) -> str:
         try:
             headers = {
                 "User-Agent": user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Upgrade-Insecure-Requests": "1",
+                "Cache-Control": "no-cache",
             }
             async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                 response = await client.get(url, headers=headers)
-                if response.status_code == 200:
+                if response.status_code == 200 and len(response.text) > 500:
                     return response.text
+                logger.warning(f"fetch_html status {response.status_code} len {len(response.text)} for {url[:60]}")
         except Exception as e:
             logger.warning(f"fetch_html error: {e}")
             continue
