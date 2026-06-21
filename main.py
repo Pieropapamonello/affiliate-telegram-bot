@@ -694,8 +694,17 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
         info["title"] = info["title"] or ld.get("title")
         info["image"] = info["image"] or ld.get("image")
         if not info["price"] and ld.get("price"):
-            cur = ld.get("currency") or "€"
-            info["price"] = f"{ld['price']}{cur if cur == '€' else ' ' + cur}"
+            info["price"] = _fmt_price(ld.get("price"), ld.get("currency"))
+
+    # Microdata (itemprop="price")
+    if not info["price"]:
+        el = soup.find(attrs={"itemprop": "price"})
+        if el:
+            val = el.get("content") or el.get_text(strip=True)
+            if val:
+                curel = soup.find(attrs={"itemprop": "priceCurrency"})
+                cur = (curel.get("content") if curel else None) or "EUR"
+                info["price"] = _fmt_price(val, cur)
 
     # Fallback prezzo da JSON inline (es. AliExpress runParams)
     if not info["price"]:
@@ -722,6 +731,24 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
     return info
 
 
+def _fmt_price(value, currency=None) -> str:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    if any(sym in s for sym in ("€", "$", "£")):
+        return s
+    cur = (currency or "EUR").upper()
+    if cur == "EUR":
+        return f"{s}€"
+    if cur == "USD":
+        return f"${s}"
+    if cur == "GBP":
+        return f"£{s}"
+    return f"{s} {cur}"
+
+
 def extract_jsonld_product(soup) -> dict:
     for tag in soup.find_all("script", type="application/ld+json"):
         try:
@@ -741,17 +768,21 @@ def extract_jsonld_product(soup) -> dict:
             offers = c.get("offers") or {}
             if isinstance(offers, list):
                 offers = offers[0] if offers else {}
+            price = cur = None
+            if isinstance(offers, dict):
+                # Offer normale, oppure AggregateOffer (lowPrice)
+                price = offers.get("price") or offers.get("lowPrice") or offers.get("highPrice")
+                cur = offers.get("priceCurrency")
+                # a volte il prezzo è annidato in priceSpecification
+                if not price and isinstance(offers.get("priceSpecification"), dict):
+                    price = offers["priceSpecification"].get("price")
+                    cur = cur or offers["priceSpecification"].get("priceCurrency")
             img = c.get("image")
             if isinstance(img, list):
                 img = img[0] if img else None
             if isinstance(img, dict):
                 img = img.get("url")
-            return {
-                "title": c.get("name"),
-                "image": img,
-                "price": offers.get("price") if isinstance(offers, dict) else None,
-                "currency": offers.get("priceCurrency") if isinstance(offers, dict) else None,
-            }
+            return {"title": c.get("name"), "image": img, "price": price, "currency": cur}
     return None
 
 
