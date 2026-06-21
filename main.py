@@ -2286,9 +2286,15 @@ async def deal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
         return
     if not context.args:
-        await update.message.reply_text("Uso: /deal <link>")
+        await update.message.reply_text(
+            "Uso: /deal <link> [prezzo] [prezzo_vecchio]\n"
+            "Es: /deal https://aliexpress.it/item/... 79.99 99.99\n"
+            "(il prezzo è utile dove non si legge in automatico, es. AliExpress)"
+        )
         return
     url = context.args[0]
+    manual_price = parse_price_to_float(context.args[1]) if len(context.args) > 1 else None
+    manual_old = parse_price_to_float(context.args[2]) if len(context.args) > 2 else None
     if is_short_url(url):
         url = await resolve_short_url(url)
 
@@ -2301,9 +2307,11 @@ async def deal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     status = await update.message.reply_text("📢 Preparo l'offerta...")
     info = await get_product_info(url, is_amazon=(store_kind == "amazon"))
-    price = parse_price_to_float(info.get("price"))
+    price = manual_price if manual_price is not None else parse_price_to_float(info.get("price"))
+    if manual_price is not None:
+        info["price"] = f"{manual_price:.2f}€"
     entry = {"chat_id": update.message.chat_id, "url": url, "is_amazon": (store_kind == "amazon")}
-    await publish_deal(context.bot, entry, info, price)
+    await publish_deal(context.bot, entry, info, price, old_price=manual_old)
     try:
         await status.delete()
     except Exception:
