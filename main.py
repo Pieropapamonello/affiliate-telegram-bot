@@ -1175,19 +1175,30 @@ ACCENT = (255, 138, 0)
 def _gradient(w: int, h: int):
     from PIL import Image, ImageDraw, ImageFilter
 
-    top, bot = (32, 36, 58), (10, 11, 16)
-    base = Image.new("RGB", (w, h), top)
-    d = ImageDraw.Draw(base)
+    # Base diagonale: viola scuro -> quasi nero
+    base = Image.new("RGB", (w, h), (12, 13, 20))
+    top = Image.new("RGB", (w, h), (40, 30, 66))
+    mask = Image.new("L", (w, h), 0)
+    md = ImageDraw.Draw(mask)
     for y in range(h):
-        r = int(top[0] + (bot[0] - top[0]) * y / h)
-        g = int(top[1] + (bot[1] - top[1]) * y / h)
-        b = int(top[2] + (bot[2] - top[2]) * y / h)
-        d.line([(0, y), (w, y)], fill=(r, g, b))
-    # bagliore accento in alto
+        md.line([(0, y), (w, y)], fill=int(170 * (1 - y / h)))
+    base = Image.composite(top, base, mask)
+
+    # Due bagliori colorati ai lati opposti (look dinamico)
     glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(glow).ellipse([w * 0.05, -h * 0.3, w * 0.95, h * 0.35], fill=ACCENT + (60,))
-    glow = glow.filter(ImageFilter.GaussianBlur(130))
-    return Image.alpha_composite(base.convert("RGBA"), glow).convert("RGB")
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([w * 0.42, -h * 0.22, w * 1.18, h * 0.52], fill=ACCENT + (90,))          # accento (alto-dx)
+    gd.ellipse([-w * 0.22, h * 0.52, w * 0.52, h * 1.22], fill=(124, 70, 255, 80))      # viola (basso-sx)
+    gd.ellipse([w * 0.30, h * 0.75, w * 0.95, h * 1.25], fill=(0, 170, 255, 45))        # azzurro (basso)
+    glow = glow.filter(ImageFilter.GaussianBlur(150))
+
+    # Vignettatura per far risaltare il centro
+    vig = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(vig).ellipse([-w * 0.25, -h * 0.25, w * 1.25, h * 1.25], fill=255)
+    vig = vig.filter(ImageFilter.GaussianBlur(220))
+    out = Image.alpha_composite(base.convert("RGBA"), glow).convert("RGB")
+    dark = Image.new("RGB", (w, h), (6, 6, 10))
+    return Image.composite(out, dark, vig)
 
 
 def _rounded(size, radius, fill):
