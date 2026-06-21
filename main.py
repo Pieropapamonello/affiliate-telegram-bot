@@ -853,7 +853,7 @@ async def shorten_with_yourls(url: str) -> str:
 
 async def _bitly_shorten(url: str) -> str:
     """Accorcia con Bitly provando i token in ordine (rotazione su quota esaurita)."""
-    for tok in BITLY_TOKENS:
+    for tok in get_bitly_tokens():
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 r = await client.post(
@@ -874,7 +874,7 @@ async def _bitly_shorten(url: str) -> str:
 
 async def shorten_url(url: str) -> str:
     """Accorcia un link: Bitly (rotazione token) -> YOURLS -> is.gd. L'affiliazione resta nel link."""
-    if BITLY_TOKENS:
+    if get_bitly_tokens():
         b = await _bitly_shorten(url)
         if b:
             return b
@@ -1150,6 +1150,15 @@ def get_post_channel() -> str:
     return load_settings().get("channel") or CHANNEL_ID
 
 
+def get_bitly_tokens() -> list:
+    """Token Bitly: da env (BITLY_TOKENS) + quelli aggiunti dal bot (settings)."""
+    toks = list(BITLY_TOKENS)
+    for t in load_settings().get("bitly_tokens", []):
+        if t not in toks:
+            toks.append(t)
+    return toks
+
+
 # ----------------------------------------------------------------------------
 # Pubblicazione offerta (canale o utente)
 # ----------------------------------------------------------------------------
@@ -1281,13 +1290,15 @@ BTN_PRODUCTS = "📋 Prodotti"
 BTN_CHANNEL = "📢 Imposta canale"
 BTN_ADD = "➕ Aggiungi prodotto"
 BTN_DEAL = "🔥 Pubblica offerta"
+BTN_TOKENS = "🔑 Token Bitly"
 BTN_HELP = "❓ Aiuto"
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [BTN_CONFIG, BTN_PRODUCTS],
         [BTN_CHANNEL, BTN_ADD],
-        [BTN_DEAL, BTN_HELP],
+        [BTN_DEAL, BTN_TOKENS],
+        [BTN_HELP],
     ],
     resize_keyboard=True,
 )
@@ -1311,6 +1322,9 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     elif text == BTN_DEAL:
         await update.message.reply_text("🔥 Manda:  /deal <link prodotto>")
+    elif text == BTN_TOKENS:
+        await tokens_cmd(update, context)
+        await update.message.reply_text("➕ Per aggiungerne: /addtoken <token1> <token2> ...")
     elif text == BTN_HELP:
         await start(update, context)
 
@@ -1391,9 +1405,76 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Admin: {len(s.get('admins', []))}\n"
         f"Prodotti monitorati: {len(wl)}\n"
         f"AI: {_ai_status()}\n"
-        f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}",
+        f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}\n"
+        f"Token Bitly: {len(get_bitly_tokens())}",
         parse_mode=ParseMode.HTML,
     )
+
+
+async def addtoken_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /addtoken <token_bitly>\n"
+            "Puoi mandarne anche più di uno separati da spazio o virgola."
+        )
+        return
+    raw = " ".join(context.args).replace(",", " ")
+    new_tokens = [t.strip() for t in raw.split() if t.strip()]
+    s = load_settings()
+    tokens = s.get("bitly_tokens", [])
+    added, invalid, dup = 0, 0, 0
+    for t in new_tokens:
+        if t in tokens or t in BITLY_TOKENS:
+            dup += 1
+            continue
+        # valida il token su Bitly
+        ok = False
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get("https://api-ssl.bitly.com/v4/user", headers={"Authorization": f"Bearer {t}"})
+                ok = r.status_code == 200
+        except Exception:
+            ok = False
+        if ok:
+            tokens.append(t)
+            added += 1
+        else:
+            invalid += 1
+    s["bitly_tokens"] = tokens
+    save_settings(s)
+    await update.message.reply_text(
+        f"✅ Token aggiunti: {added}\n"
+        f"⚠️ Non validi: {invalid} · Duplicati: {dup}\n"
+        f"🔑 Totale token attivi: {len(get_bitly_tokens())}"
+    )
+
+
+async def tokens_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    toks = get_bitly_tokens()
+    if not toks:
+        await update.message.reply_text("Nessun token Bitly. Aggiungili con /addtoken <token> (uso is.gd).")
+        return
+    masked = "\n".join(f"• …{t[-6:]}" for t in toks)
+    await update.message.reply_text(
+        f"🔑 <b>Token Bitly attivi: {len(toks)}</b>\n{masked}\n\nPer azzerare: /cleartokens",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def cleartokens_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    s = load_settings()
+    s["bitly_tokens"] = []
+    save_settings(s)
+    await update.message.reply_text("🗑️ Token Bitly (aggiunti dal bot) rimossi.")
 
 
 async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1606,11 +1687,14 @@ def main():
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("setchannel", setchannel_cmd))
     app.add_handler(CommandHandler("config", config_cmd))
+    app.add_handler(CommandHandler("addtoken", addtoken_cmd))
+    app.add_handler(CommandHandler("tokens", tokens_cmd))
+    app.add_handler(CommandHandler("cleartokens", cleartokens_cmd))
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
-    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_HELP)})$"
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_HELP)})$"
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
