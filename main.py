@@ -2560,39 +2560,16 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("📸 Recupero info prodotto...")
         info = await get_product_info(url, is_amazon=(store_kind == "amazon"))
 
-        # Dati illeggibili (es. AliExpress che blocca l'IP): niente card vuota,
-        # mando comunque il link affiliato funzionante + nota.
-        if not info.get("title") and not info.get("image"):
-            short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
-            await status_msg.delete()
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-            await update.message.chat.send_message(
-                f"🛍️ <b>Offerta {info.get('source') or ''}</b>\n"
-                f"<i>(dettagli prodotto non leggibili da questo store)</i>\n\n🛒 {short_url}",
-                parse_mode=ParseMode.HTML,
-                reply_markup=buy_button(short_url),
-            )
-            return
-
         price_f = parse_price_to_float(info.get("price"))
-        # Recensione AI solo se ho letto un titolo reale (evita testi generici/fuffa)
         has_real_title = bool(info.get("title")) and len(info.get("title") or "") > 5
         review = None
         if has_real_title:
             await status_msg.edit_text("📝 Scrivo la recensione...")
             review = await generate_ai_review(info, f"Prezzo: {info.get('price') or 'n/d'}")
 
-        # Minimo storico
         hist = record_observation(url, price_f)
         price_line = build_price_line(price_f, hist) if price_f is not None else (info.get("price") or "")
 
-        # Video nativo SOLO se il sito espone un file video (no link esterni YouTube)
-        video_url = info.get("video") if video_enabled() else None
-
-        # Link a video-recensione YouTube (match severo: solo se è esattamente quel prodotto)
         review_link = None
         if has_real_title and review_link_enabled() and YOUTUBE_API_KEY:
             await status_msg.edit_text("🎥 Cerco una recensione video...")
@@ -2600,38 +2577,54 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
-
-        message = build_product_message(info, user_name=user.first_name, review=review, price_line=price_line)
-        if review_link:
-            message += f"\n\n🎥 <a href='{review_link}'>Guarda la video-recensione</a>"
         kb = buy_button(short_url)
         await status_msg.delete()
         try:
             await update.message.delete()
         except Exception:
             pass
-
         chat = update.message.chat
 
-        # 1) Video nativo dal sito (se presente) → al posto dell'immagine
-        if video_url:
-            try:
-                await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
-                return
-            except Exception as e:
-                logger.warning(f"send_video error: {e}")
+        # --- CON immagine prodotto → card brandizzata ---
+        if info.get("image"):
+            message = build_product_message(info, user_name=user.first_name, review=review, price_line=price_line)
+            if review_link:
+                message += f"\n\n🎥 <a href='{review_link}'>Guarda la video-recensione</a>"
+            video_url = info.get("video") if video_enabled() else None
+            if video_url:
+                try:
+                    await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                    return
+                except Exception as e:
+                    logger.warning(f"send_video error: {e}")
+            photo = await get_post_photo(info, price=price_f, is_min=hist.get("is_new_min"))
+            if photo:
+                try:
+                    await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                    return
+                except Exception as e:
+                    logger.warning(f"Photo error: {e}")
+            await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
+            return
 
-        # 2) Card personalizzata (foto brandizzata) se attiva, altrimenti immagine prodotto
-        photo = await get_post_photo(info, price=price_f, is_min=hist.get("is_new_min"))
-        if photo:
-            try:
-                await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
-                return
-            except Exception as e:
-                logger.warning(f"Photo error: {e}")
-
-        # 3) Solo testo
-        await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
+        # --- SENZA immagine (es. AliExpress/Temu che bloccano) → anteprima Telegram del link ---
+        title = info.get("title") or f"Offerta {info.get('source') or ''}".strip()
+        parts = [f"🛍️ <b>{title}</b>"]
+        if info.get("source"):
+            parts.append(f"🏪 <b>Store:</b> {info['source']}")
+        if price_line:
+            parts.append(f"💰 <b>Prezzo:</b> {price_line}")
+        if review:
+            parts.append(f"\n📝 <i>{review}</i>")
+        if review_link:
+            parts.append(f"🎥 <a href='{review_link}'>Video-recensione</a>")
+        parts.append(f"\n🛒 {short_url}")
+        await chat.send_message(
+            "\n".join(parts),
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+            link_preview_options=LinkPreviewOptions(url=short_url, prefer_large_media=True, show_above_text=True),
+        )
 
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
