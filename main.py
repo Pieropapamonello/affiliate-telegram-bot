@@ -1184,13 +1184,13 @@ def _gradient(w: int, h: int):
         md.line([(0, y), (w, y)], fill=int(170 * (1 - y / h)))
     base = Image.composite(top, base, mask)
 
-    # Due bagliori colorati ai lati opposti (look dinamico)
+    # Bagliori colorati (look premium "synthwave")
     glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse([w * 0.42, -h * 0.22, w * 1.18, h * 0.52], fill=ACCENT + (90,))          # accento (alto-dx)
-    gd.ellipse([-w * 0.22, h * 0.52, w * 0.52, h * 1.22], fill=(124, 70, 255, 80))      # viola (basso-sx)
-    gd.ellipse([w * 0.30, h * 0.75, w * 0.95, h * 1.25], fill=(0, 170, 255, 45))        # azzurro (basso)
-    glow = glow.filter(ImageFilter.GaussianBlur(150))
+    gd.ellipse([w * 0.45, -h * 0.25, w * 1.25, h * 0.55], fill=(0, 200, 255, 95))       # ciano (alto-dx)
+    gd.ellipse([-w * 0.30, h * 0.45, w * 0.55, h * 1.25], fill=(210, 50, 200, 90))      # magenta (basso-sx)
+    gd.ellipse([w * 0.25, h * 0.80, w * 1.0, h * 1.30], fill=ACCENT + (55,))            # accento caldo (basso)
+    glow = glow.filter(ImageFilter.GaussianBlur(160))
 
     # Vignettatura per far risaltare il centro
     vig = Image.new("L", (w, h), 0)
@@ -1259,24 +1259,28 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
     draw = ImageDraw.Draw(bg)
 
     # Titolo prodotto (max 2 righe), centrato in alto
-    title_bottom = 175
+    title_bottom = 150
     if title:
         ft = _font(46)
-        lines = _wrap(draw, title, ft, 900, 2)
-        ty = 188
+        lines = _wrap(draw, title, ft, 920, 2)
+        ty = 150
         for ln in lines:
             lw = draw.textlength(ln, font=ft)
             draw.text(((W - lw) / 2 + 2, ty + 2), ln, font=ft, fill=(0, 0, 0))
             draw.text(((W - lw) / 2, ty), ln, font=ft, fill=(245, 245, 245))
             ty += 58
-        title_bottom = ty + 14
+        title_bottom = ty + 12
 
-    # Prodotto + ombra
-    prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    prod.thumbnail((600, 400))
+    # Prodotto + ombra — dimensione adattiva (più grande possibile senza sforare)
     pad = 34
+    footer_h = 120 + (84 if is_min else 0)        # spazio riservato a ribbon+brand
+    card_top = max(title_bottom, 160)
+    avail_h = (H - footer_h - 40) - card_top - 28  # altezza disponibile per la card
+    prod_max_h = max(300, min(560, avail_h - 2 * pad))
+    prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    prod.thumbnail((800, prod_max_h))
     cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
-    cx, cy = (W - cw) // 2, max(title_bottom, 175)
+    cx, cy = (W - cw) // 2, card_top
     shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ImageDraw.Draw(shadow).rounded_rectangle(
         [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=44, fill=(0, 0, 0, 170)
