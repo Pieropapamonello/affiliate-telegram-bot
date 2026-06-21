@@ -98,7 +98,7 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 VIDEO_MAX_SECONDS = int(os.environ.get("VIDEO_MAX_SECONDS", 180))
 
 # Immagine personalizzata (card) — prodotto + sfondo + scritta brand + badge store
-BRAND_TEXT = os.environ.get("BRAND_TEXT", "Affari di Nello")
+BRAND_TEXT = os.environ.get("BRAND_TEXT", "Gli Affari di Nello")
 
 # AI per i testi dei post — opzionale. Provider in ordine: Groq > Gemini > Claude.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -1237,6 +1237,30 @@ STORE_COLORS = {
     "Temu": (255, 102, 0),
 }
 
+STORE_DOMAINS = {
+    "Amazon": "amazon.it", "AliExpress": "aliexpress.com", "eBay": "ebay.it",
+    "Zalando": "zalando.it", "Temu": "temu.com", "MediaWorld": "mediaworld.it",
+    "Unieuro": "unieuro.it", "Banggood": "banggood.com", "Shein": "shein.com",
+    "IKEA": "ikea.com", "Decathlon": "decathlon.it", "Zooplus": "zooplus.it",
+}
+
+# Temi colore per categoria prodotto (sfondo quando manca l'immagine)
+CATEGORY_THEMES = [
+    (("gatt", "cane", "cani", "cucc", "pet", "whiskas", "croccant", "animal", "zoo", "acquar"), ((26, 120, 70), (8, 34, 20))),
+    (("proiett", "cuffi", "auricol", "smartphone", "telefono", "tablet", "televis", "monitor", "laptop", "robot", "drone", "console", "elettro", "tech", "caric", "power", "camera"), ((24, 70, 150), (8, 16, 40))),
+    (("trucco", "crema", "beauty", "make", "profumo", "skincare", "capell"), ((170, 40, 120), (44, 10, 34))),
+    (("gioco", "funko", "lego", "puzzle", "collez", "nerd", "anime", "manga", "carte"), ((150, 60, 205), (30, 12, 52))),
+    (("cucina", "casa", "arred", "mobil", "tavol", "letto", "lampada", "tenda", "aspira"), ((170, 95, 30), (44, 24, 8))),
+    (("scarp", "maglia", "giacca", "vestit", "abbig", "moda", "borsa", "orolog"), ((40, 90, 130), (10, 24, 36))),
+]
+
+
+def _store_logo_url(store: str) -> str:
+    if not store:
+        return None
+    domain = STORE_DOMAINS.get(store) or f"{store.lower().replace(' ', '')}.com"
+    return f"https://www.google.com/s2/favicons?domain={domain}&sz=128"
+
 
 async def fetch_bytes(url: str) -> bytes:
     try:
@@ -1266,33 +1290,53 @@ def _font(size: int):
 ACCENT = (255, 138, 0)
 
 
-def _gradient(w: int, h: int):
+def _category_colors(title: str):
+    t = (title or "").lower()
+    for keys, colors in CATEGORY_THEMES:
+        if any(k in t for k in keys):
+            return colors
+    return ((40, 30, 66), (10, 11, 18))  # default synthwave
+
+
+def _gradient(w: int, h: int, title: str = None):
     from PIL import Image, ImageDraw, ImageFilter
 
-    # Base diagonale: viola scuro -> quasi nero
-    base = Image.new("RGB", (w, h), (12, 13, 20))
-    top = Image.new("RGB", (w, h), (40, 30, 66))
+    c_top, c_bot = _category_colors(title)
+    base = Image.new("RGB", (w, h), c_bot)
+    top = Image.new("RGB", (w, h), c_top)
     mask = Image.new("L", (w, h), 0)
     md = ImageDraw.Draw(mask)
     for y in range(h):
-        md.line([(0, y), (w, y)], fill=int(170 * (1 - y / h)))
+        md.line([(0, y), (w, y)], fill=int(190 * (1 - y / h)))
     base = Image.composite(top, base, mask)
 
-    # Bagliori colorati (look premium "synthwave")
     glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse([w * 0.45, -h * 0.25, w * 1.25, h * 0.55], fill=(0, 200, 255, 95))       # ciano (alto-dx)
-    gd.ellipse([-w * 0.30, h * 0.45, w * 0.55, h * 1.25], fill=(210, 50, 200, 90))      # magenta (basso-sx)
-    gd.ellipse([w * 0.25, h * 0.80, w * 1.0, h * 1.30], fill=ACCENT + (55,))            # accento caldo (basso)
+    gd.ellipse([w * 0.45, -h * 0.25, w * 1.25, h * 0.55], fill=c_top + (110,))
+    gd.ellipse([-w * 0.30, h * 0.50, w * 0.55, h * 1.25], fill=ACCENT + (60,))
     glow = glow.filter(ImageFilter.GaussianBlur(160))
 
-    # Vignettatura per far risaltare il centro
     vig = Image.new("L", (w, h), 0)
     ImageDraw.Draw(vig).ellipse([-w * 0.25, -h * 0.25, w * 1.25, h * 1.25], fill=255)
     vig = vig.filter(ImageFilter.GaussianBlur(220))
     out = Image.alpha_composite(base.convert("RGBA"), glow).convert("RGB")
     dark = Image.new("RGB", (w, h), (6, 6, 10))
     return Image.composite(out, dark, vig)
+
+
+def _blurred_backdrop(prod_img, w: int, h: int):
+    """Sfondo = immagine prodotto ingrandita e sfocata (colori coerenti con l'articolo)."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance
+
+    bg = ImageOps.fit(prod_img.convert("RGB"), (w, h))
+    bg = bg.filter(ImageFilter.GaussianBlur(60))
+    bg = ImageEnhance.Color(bg).enhance(1.25)        # colori più vivi
+    bg = Image.blend(bg, Image.new("RGB", (w, h), (0, 0, 0)), 0.45)  # scurisci per contrasto
+    # vignettatura
+    vig = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(vig).ellipse([-w * 0.2, -h * 0.2, w * 1.2, h * 1.2], fill=255)
+    vig = vig.filter(ImageFilter.GaussianBlur(200))
+    return Image.composite(bg, Image.new("RGB", (w, h), (6, 6, 10)), vig)
 
 
 def _rounded(size, radius, fill):
@@ -1335,23 +1379,38 @@ def _wrap(draw, text, font, max_w, max_lines=2):
     return lines
 
 
+def _draw_store_chip(draw, bg, store, logo_bytes):
+    """Chip bianco con logo (favicon) + nome store, in alto a sinistra."""
+    if not store:
+        return
+    from PIL import Image
+
+    x, y, h, pad = 56, 52, 74, 18
+    icon = None
+    if logo_bytes:
+        try:
+            icon = Image.open(io.BytesIO(logo_bytes)).convert("RGBA")
+            icon.thumbnail((50, 50))
+        except Exception:
+            icon = None
+    f = _font(36)
+    tw = draw.textlength(store, font=f)
+    icon_w = (icon.width + 12) if icon else 0
+    chip_w = int(pad + icon_w + tw + pad)
+    chip = _rounded((chip_w, h), 22, (255, 255, 255, 240))
+    bg.paste(chip, (x, y), chip)
+    cx = x + pad
+    if icon:
+        bg.paste(icon, (cx, y + (h - icon.height) // 2), icon)
+        cx += icon.width + 12
+    draw.text((cx, y + (h - f.size) / 2 - 2), store, font=f, fill=(20, 20, 20))
+
+
 def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_price=None,
-                  is_min=False, title=None) -> bytes:
+                  is_min=False, title=None, logo_bytes=None) -> bytes:
     from PIL import Image, ImageDraw, ImageOps, ImageFilter
 
     W = H = 1080
-    # Sfondo
-    if bg_bytes:
-        try:
-            bg = ImageOps.fit(Image.open(io.BytesIO(bg_bytes)).convert("RGB"), (W, H))
-            bg = Image.blend(bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.5)
-        except Exception:
-            bg = _gradient(W, H)
-    else:
-        bg = _gradient(W, H)
-
-    draw = ImageDraw.Draw(bg)
-
     prod = None
     if img_bytes:
         try:
@@ -1359,56 +1418,56 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
         except Exception:
             prod = None
 
-    if prod is not None:
-        # --- Layout CON immagine prodotto ---
-        title_bottom = 150
-        if title:
-            ft = _font(46)
-            lines = _wrap(draw, title, ft, 920, 2)
-            ty = 150
-            for ln in lines:
-                lw = draw.textlength(ln, font=ft)
-                draw.text(((W - lw) / 2 + 2, ty + 2), ln, font=ft, fill=(0, 0, 0))
-                draw.text(((W - lw) / 2, ty), ln, font=ft, fill=(245, 245, 245))
-                ty += 58
-            title_bottom = ty + 12
+    # Sfondo: /setbg utente > backdrop sfocato del prodotto > gradiente per categoria
+    if bg_bytes:
+        try:
+            bg = ImageOps.fit(Image.open(io.BytesIO(bg_bytes)).convert("RGB"), (W, H))
+            bg = Image.blend(bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.5)
+        except Exception:
+            bg = _gradient(W, H, title)
+    elif prod is not None:
+        bg = _blurred_backdrop(prod, W, H)
+    else:
+        bg = _gradient(W, H, title)
 
+    draw = ImageDraw.Draw(bg)
+    footer_h = 130 + (84 if is_min else 0)
+
+    if prod is not None:
+        # --- Prodotto GRANDE centrato (niente titolo sull'immagine) ---
+        card_top = 170
         pad = 34
-        footer_h = 120 + (84 if is_min else 0)
-        card_top = max(title_bottom, 160)
-        avail_h = (H - footer_h - 40) - card_top - 28
-        prod_max_h = max(300, min(560, avail_h - 2 * pad))
-        prod.thumbnail((800, prod_max_h))
+        avail_h = (H - footer_h - 40) - card_top - 20
+        prod_max_h = max(360, min(640, avail_h - 2 * pad))
+        prod.thumbnail((830, prod_max_h))
         cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
         cx, cy = (W - cw) // 2, card_top
         shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
-            [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=44, fill=(0, 0, 0, 170)
+            [cx + 8, cy + 24, cx + cw + 8, cy + ch + 24], radius=46, fill=(0, 0, 0, 200)
         )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(24))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(28))
         bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
-        card = _rounded((cw, ch), 44, (255, 255, 255, 255))
+        card = _rounded((cw, ch), 46, (255, 255, 255, 255))
         card.paste(prod, (pad, pad), prod)
         bg.paste(card, (cx, cy), card)
         draw = ImageDraw.Draw(bg)
-        y_after = cy + ch + 36
+        y_after = cy + ch + 42
     else:
-        # --- Layout SENZA immagine: titolo grande centrato ---
-        ft = _font(62)
+        # --- Senza immagine: titolo grande centrato ---
+        ft = _font(60)
         lines = _wrap(draw, title or "Offerta", ft, 920, 4)
-        block_h = len(lines) * 76
-        ty = max(300, (H - block_h) // 2 - 40)
+        block_h = len(lines) * 74
+        ty = max(300, (H - block_h) // 2 - 30)
         for ln in lines:
             lw = draw.textlength(ln, font=ft)
             draw.text(((W - lw) / 2 + 2, ty + 2), ln, font=ft, fill=(0, 0, 0))
             draw.text(((W - lw) / 2, ty), ln, font=ft, fill=(245, 245, 245))
-            ty += 76
+            ty += 74
         y_after = ty + 30
 
-    # Badge store (in alto a sinistra)
-    if store:
-        col = STORE_COLORS.get(store, ACCENT)
-        _chip(draw, bg, (60, 56), store.upper(), _font(36), col, h=62, radius=20)
+    # Logo store (chip con favicon + nome) in alto a sinistra
+    _draw_store_chip(draw, bg, store, logo_bytes)
 
     # Sticker prezzo (in alto a destra)
     if price is not None:
@@ -1479,9 +1538,13 @@ async def generate_card_image(image_url, store, brand_text, price=None, old_pric
     bgurl = get_bg_image_url()
     if bgurl:
         bg = await fetch_bytes(bgurl)
+    logo = None
+    lu = _store_logo_url(store)
+    if lu:
+        logo = await fetch_bytes(lu)
     try:
         return await asyncio.to_thread(
-            _compose_card, img, store, brand_text, bg, price, old_price, is_min, title
+            _compose_card, img, store, brand_text, bg, price, old_price, is_min, title, logo
         )
     except Exception as e:
         logger.warning(f"card image error: {e}")
