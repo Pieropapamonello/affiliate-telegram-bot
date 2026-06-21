@@ -21,7 +21,7 @@ from urllib.parse import urlencode, parse_qs, urlparse, quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
-from telegram import Update, LinkPreviewOptions
+from telegram import Update, LinkPreviewOptions, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -1238,11 +1238,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• /config – stato configurazione\n"
         "• /id – mostra il tuo id\n"
     )
-    await update.message.reply_text(welcome)
+    if is_admin(update.effective_user.id):
+        await update.message.reply_text(welcome, reply_markup=ADMIN_KEYBOARD)
+    else:
+        await update.message.reply_text(welcome)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await start(update, context)
+
+
+BTN_CONFIG = "⚙️ Config"
+BTN_PRODUCTS = "📋 Prodotti"
+BTN_CHANNEL = "📢 Imposta canale"
+BTN_ADD = "➕ Aggiungi prodotto"
+BTN_DEAL = "🔥 Pubblica offerta"
+BTN_HELP = "❓ Aiuto"
+
+ADMIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [BTN_CONFIG, BTN_PRODUCTS],
+        [BTN_CHANNEL, BTN_ADD],
+        [BTN_DEAL, BTN_HELP],
+    ],
+    resize_keyboard=True,
+)
+
+
+async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = (update.message.text or "").strip()
+    if text == BTN_CONFIG:
+        await config_cmd(update, context)
+    elif text == BTN_PRODUCTS:
+        await list_cmd(update, context)
+    elif text == BTN_CHANNEL:
+        await update.message.reply_text(
+            "📢 Manda:  /setchannel @iltuocanale\n"
+            "(prima aggiungi il bot come AMMINISTRATORE del canale). Per togliere: /setchannel off"
+        )
+    elif text == BTN_ADD:
+        await update.message.reply_text(
+            "➕ Manda:  /watch <link prodotto> [prezzo]\n"
+            "Es:  /watch https://www.amazon.it/dp/XXXX 19.90"
+        )
+    elif text == BTN_DEAL:
+        await update.message.reply_text("🔥 Manda:  /deal <link prodotto>")
+    elif text == BTN_HELP:
+        await start(update, context)
 
 
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1267,7 +1309,10 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         admins.append(uid)
         s["admins"] = admins
         save_settings(s)
-    await update.message.reply_text("✅ Ora sei admin. Comandi: /setchannel, /config, /watch, /list, /deal")
+    await update.message.reply_text(
+        "✅ Ora sei admin! Usa i tasti qui sotto 👇",
+        reply_markup=ADMIN_KEYBOARD,
+    )
 
 
 def _deny_if_not_admin(update: Update) -> bool:
@@ -1537,6 +1582,8 @@ def main():
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_HELP)})$"
+    app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
     if app.job_queue:
