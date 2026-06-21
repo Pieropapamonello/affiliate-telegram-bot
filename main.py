@@ -460,6 +460,21 @@ async def fetch_via_jina(url: str) -> str:
     return ""
 
 
+def _title_from_url(url: str) -> str:
+    """Ricava un titolo leggibile dallo slug dell'URL (utile per Temu, ecc.)."""
+    try:
+        seg = urlparse(url).path.rstrip("/").split("/")[-1]
+        seg = re.sub(r"\.html?$", "", seg, flags=re.I)
+        seg = re.sub(r"-?g?-?\d{6,}$", "", seg)        # rimuove id prodotto finale
+        seg = re.sub(r"[-_]+", " ", seg).strip()
+        seg = re.sub(r"\s+", " ", seg)
+        if len(seg) < 6:
+            return None
+        return seg[:120].strip().capitalize()
+    except Exception:
+        return None
+
+
 def _jina_extract(text: str) -> tuple:
     """Estrae (title, image) dal markdown di Jina Reader."""
     title = None
@@ -665,6 +680,8 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
             if jt:
                 t, img = _jina_extract(jt)
                 info["title"], info["image"] = t, img
+            if not info["title"]:
+                info["title"] = _title_from_url(url)
         return info
     soup = BeautifulSoup(html, "html.parser")
 
@@ -728,6 +745,8 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
             t, img = _jina_extract(jt)
             info["title"] = info["title"] or t
             info["image"] = info["image"] or img
+    if not info["title"]:
+        info["title"] = _title_from_url(url)
     return info
 
 
