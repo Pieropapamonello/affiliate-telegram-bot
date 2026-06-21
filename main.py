@@ -1499,7 +1499,9 @@ def route_via_skimlinks() -> bool:
 
 
 def video_enabled() -> bool:
-    return load_settings().get("video_enabled", True)
+    # Default OFF: i video estratti dalle pagine non sono affidabili (spesso non
+    # sono del prodotto). Si usa sempre la card personalizzata. Riattivabile con /setvideo on.
+    return load_settings().get("video_enabled", False)
 
 
 def card_enabled() -> bool:
