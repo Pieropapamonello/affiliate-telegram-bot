@@ -876,9 +876,9 @@ async def _bitly_shorten(url: str) -> str:
     return None
 
 
-async def shorten_url(url: str) -> str:
-    """Accorcia un link: Bitly (rotazione token) -> YOURLS -> is.gd. L'affiliazione resta nel link."""
-    if get_bitly_tokens():
+async def shorten_url(url: str, use_bitly: bool = True) -> str:
+    """Accorcia un link. Bitly (solo se use_bitly) -> YOURLS -> is.gd. L'affiliazione resta nel link."""
+    if use_bitly and get_bitly_tokens():
         b = await _bitly_shorten(url)
         if b:
             return b
@@ -1178,8 +1178,8 @@ def route_via_skimlinks() -> bool:
 # Pubblicazione offerta (canale o utente)
 # ----------------------------------------------------------------------------
 async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_price: float = None):
-    affiliate_url, _ = build_affiliate_link(entry["url"])
-    short_url = await shorten_url(affiliate_url)
+    affiliate_url, kind = build_affiliate_link(entry["url"])
+    short_url = await shorten_url(affiliate_url, use_bitly=(kind == "amazon"))
 
     if current_price is not None:
         if old_price and old_price > current_price:
@@ -1692,7 +1692,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             youtube_url = await find_youtube_video(info["title"])
 
         await status_msg.edit_text("🔗 Accorciando...")
-        short_url = await shorten_url(affiliate_url)
+        short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
 
         message = build_product_message(info, short_url, user.first_name, review=review)
         await status_msg.delete()
