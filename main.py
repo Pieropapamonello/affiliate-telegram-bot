@@ -664,6 +664,21 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
         if not info["price"] and ld.get("price"):
             cur = ld.get("currency") or "€"
             info["price"] = f"{ld['price']}{cur if cur == '€' else ' ' + cur}"
+
+    # Fallback prezzo da JSON inline (es. AliExpress runParams)
+    if not info["price"]:
+        for pat in (
+            r'"formatedActivityPrice"\s*:\s*"([^"]+)"',
+            r'"formatedPrice"\s*:\s*"([^"]+)"',
+            r'"minActivityAmount"\s*:\s*\{[^}]*?"value"\s*:\s*([\d.]+)',
+            r'"minAmount"\s*:\s*\{[^}]*?"value"\s*:\s*([\d.]+)',
+            r'"salePrice"\s*:\s*\{[^}]*?"value"\s*:\s*([\d.]+)',
+        ):
+            m = re.search(pat, html)
+            if m:
+                val = m.group(1)
+                info["price"] = val if "€" in val or "," in val else f"{val}€"
+                break
     return info
 
 
@@ -1191,7 +1206,32 @@ def _chip(draw, bg, xy, text, font, color, text_color=(255, 255, 255), pad=20, h
     return int(tw + 2 * pad)
 
 
-def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_price=None, is_min=False) -> bytes:
+def _wrap(draw, text, font, max_w, max_lines=2):
+    words = (text or "").split()
+    lines, cur = [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if draw.textlength(t, font=font) <= max_w:
+            cur = t
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+            if len(lines) >= max_lines:
+                break
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    lines = lines[:max_lines]
+    if lines and len(" ".join(lines)) < len(text or ""):
+        last = lines[-1]
+        while last and draw.textlength(last + "…", font=font) > max_w:
+            last = last[:-1]
+        lines[-1] = last + "…"
+    return lines
+
+
+def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_price=None,
+                  is_min=False, title=None) -> bytes:
     from PIL import Image, ImageDraw, ImageOps, ImageFilter
 
     W = H = 1080
@@ -1205,19 +1245,34 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
     else:
         bg = _gradient(W, H)
 
+    draw = ImageDraw.Draw(bg)
+
+    # Titolo prodotto (max 2 righe), centrato in alto
+    title_bottom = 175
+    if title:
+        ft = _font(46)
+        lines = _wrap(draw, title, ft, 900, 2)
+        ty = 188
+        for ln in lines:
+            lw = draw.textlength(ln, font=ft)
+            draw.text(((W - lw) / 2 + 2, ty + 2), ln, font=ft, fill=(0, 0, 0))
+            draw.text(((W - lw) / 2, ty), ln, font=ft, fill=(245, 245, 245))
+            ty += 58
+        title_bottom = ty + 14
+
     # Prodotto + ombra
     prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    prod.thumbnail((680, 520))
-    pad = 36
+    prod.thumbnail((600, 400))
+    pad = 34
     cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
-    cx, cy = (W - cw) // 2, 175
+    cx, cy = (W - cw) // 2, max(title_bottom, 175)
     shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ImageDraw.Draw(shadow).rounded_rectangle(
-        [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=46, fill=(0, 0, 0, 170)
+        [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=44, fill=(0, 0, 0, 170)
     )
     shadow = shadow.filter(ImageFilter.GaussianBlur(24))
     bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
-    card = _rounded((cw, ch), 46, (255, 255, 255, 255))
+    card = _rounded((cw, ch), 44, (255, 255, 255, 255))
     card.paste(prod, (pad, pad), prod)
     bg.paste(card, (cx, cy), card)
 
@@ -1226,7 +1281,7 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
     # Badge store (in alto a sinistra)
     if store:
         col = STORE_COLORS.get(store, ACCENT)
-        _chip(draw, bg, (64, 64), store.upper(), _font(38), col, h=64, radius=20)
+        _chip(draw, bg, (60, 56), store.upper(), _font(36), col, h=62, radius=20)
 
     # Sticker prezzo (in alto a destra)
     if price is not None:
@@ -1286,7 +1341,8 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
     return out.getvalue()
 
 
-async def generate_card_image(image_url, store, brand_text, price=None, old_price=None, is_min=False) -> bytes:
+async def generate_card_image(image_url, store, brand_text, price=None, old_price=None,
+                              is_min=False, title=None) -> bytes:
     if not image_url:
         return None
     img = await fetch_bytes(image_url)
@@ -1297,7 +1353,9 @@ async def generate_card_image(image_url, store, brand_text, price=None, old_pric
     if bgurl:
         bg = await fetch_bytes(bgurl)
     try:
-        return await asyncio.to_thread(_compose_card, img, store, brand_text, bg, price, old_price, is_min)
+        return await asyncio.to_thread(
+            _compose_card, img, store, brand_text, bg, price, old_price, is_min, title
+        )
     except Exception as e:
         logger.warning(f"card image error: {e}")
         return None
@@ -1307,7 +1365,8 @@ async def get_post_photo(info: dict, price=None, old_price=None, is_min=False):
     """Card personalizzata (byte) se attiva, altrimenti URL immagine, altrimenti None."""
     if card_enabled() and info.get("image"):
         card = await generate_card_image(
-            info.get("image"), info.get("source"), get_brand_text(), price, old_price, is_min
+            info.get("image"), info.get("source"), get_brand_text(),
+            price, old_price, is_min, info.get("title"),
         )
         if card:
             return card
@@ -1333,28 +1392,36 @@ def build_product_message(info: dict, short_url: str = None, user_name: str = No
         except Exception:
             rating_stars = f"⭐ {rating}/5"
 
-    msg = ""
+    lines = []
     if user_name:
-        msg += f"👤 {user_name} ha condiviso questo articolo\n\n"
-    msg += f"📌 <b>{title}</b>\n"
+        lines.append(f"👤 <i>{user_name} ha condiviso questo articolo</i>")
+        lines.append("")
+    lines.append(f"🛍️ <b>{title}</b>")
+    lines.append("")  # separatore
+
+    info_block = []
     if source:
-        msg += f"🏪 {source}"
-        # mostra il venditore solo se è "Usato" (info utile); altrimenti lo ometto
-        if condition and "Usato" in condition:
-            msg += f" · {condition}"
-        msg += "\n"
+        seller = f" · {condition}" if (condition and "Usato" in condition) else ""
+        info_block.append(f"🏪 <b>Store:</b> {source}{seller}")
     if price_line:
-        msg += f"💰 <b>{price_line}</b>\n"
-    if rating_stars:
-        msg += f"{rating_stars}\n"
+        info_block.append(f"💰 <b>Prezzo:</b> {price_line}")
+    if rating:
+        info_block.append(f"⭐ <b>Voto:</b> {rating}/5")
+    if info_block:
+        lines.extend(info_block)
+        lines.append("")
+
     if review:
         rev = max_lines(review, 3, line_len=70)
         if len(rev) > 200:
             rev = rev[:200].rsplit(" ", 1)[0] + "…"
-        msg += f"\n📝 {rev}\n"
+        lines.append(f"📝 <i>{rev}</i>")
+
     if short_url:
-        msg += f"\n🛒 {short_url}"
-    return msg.strip()
+        lines.append("")
+        lines.append(f"🛒 {short_url}")
+
+    return "\n".join(lines).strip()
 
 
 # ----------------------------------------------------------------------------
