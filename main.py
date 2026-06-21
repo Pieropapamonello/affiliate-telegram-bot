@@ -371,19 +371,30 @@ def add_amazon_tag(url: str, tag: str) -> str:
 
 
 def build_affiliate_link(url: str) -> tuple:
-    """Ritorna (affiliate_url, store_kind). store_kind in {amazon, aggregator, none}."""
+    """Ritorna (affiliate_url, store_kind). store_kind in {amazon, merchant, aggregator, none}.
+    Priorità: Amazon (tag nativo) → mappa per-negozio → Skimlinks → nessuno."""
     amazon = is_amazon_url(url)
     tag = get_affiliate_tag()
     via_skimlinks = route_via_skimlinks()
-    # Amazon nativo (tag) salvo che si voglia far passare tutto da Skimlinks
+
+    # 1) Amazon col tag nativo (salvo routing forzato su Skimlinks)
     if amazon and not (via_skimlinks and DEEPLINK_TEMPLATE):
         normalized = normalize_amazon_url(url)
         return add_amazon_tag(normalized, tag), "amazon"
+
+    # 2) Mappa per-negozio (deeplink dedicato del merchant, se configurato)
+    tmpl = get_merchant_template(url)
+    if tmpl:
+        target = normalize_amazon_url(url) if amazon else url
+        return tmpl.replace("{url}", quote_plus(target)), "merchant"
+
+    # 3) Skimlinks (fallback per tutto il resto)
     if DEEPLINK_TEMPLATE:
         target = normalize_amazon_url(url) if amazon else url
-        affiliate = DEEPLINK_TEMPLATE.replace("{url}", quote_plus(target))
-        return affiliate, "aggregator"
-    if amazon:  # nessun aggregatore: ripiego sul tag nativo
+        return DEEPLINK_TEMPLATE.replace("{url}", quote_plus(target)), "aggregator"
+
+    # 4) Ripiego: Amazon col tag se non c'è aggregatore
+    if amazon:
         normalized = normalize_amazon_url(url)
         return add_amazon_tag(normalized, tag), "amazon"
     return url, "none"
@@ -1350,6 +1361,20 @@ def video_enabled() -> bool:
     return load_settings().get("video_enabled", True)
 
 
+def get_merchant_template(url: str) -> str:
+    """Deeplink dedicato per il dominio del merchant, se configurato dall'admin."""
+    try:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+    except Exception:
+        return None
+    if not host:
+        return None
+    for domain, tmpl in load_settings().get("merchants", {}).items():
+        if domain.lower() in host:
+            return tmpl
+    return None
+
+
 # ----------------------------------------------------------------------------
 # Pubblicazione offerta (canale o utente)
 # ----------------------------------------------------------------------------
@@ -1501,6 +1526,7 @@ BTN_ADD = "➕ Aggiungi prodotto"
 BTN_DEAL = "🔥 Pubblica offerta"
 BTN_TOKENS = "🔑 Token Bitly"
 BTN_TAG = "🏷️ Tag Amazon"
+BTN_MERCHANTS = "🗺️ Negozi"
 BTN_HELP = "❓ Aiuto"
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -1508,7 +1534,8 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_CONFIG, BTN_PRODUCTS],
         [BTN_CHANNEL, BTN_ADD],
         [BTN_DEAL, BTN_TOKENS],
-        [BTN_TAG, BTN_HELP],
+        [BTN_TAG, BTN_MERCHANTS],
+        [BTN_HELP],
     ],
     resize_keyboard=True,
 )
@@ -1538,6 +1565,9 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif text == BTN_TAG:
         await settag_cmd(update, context)
         await update.message.reply_text("Routing: /setrouting native|skimlinks")
+    elif text == BTN_MERCHANTS:
+        await merchants_cmd(update, context)
+        await update.message.reply_text("➕ Aggiungi: /setmerchant <dominio> <template_con_{url}>")
     elif text == BTN_HELP:
         await start(update, context)
 
@@ -1619,6 +1649,7 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Prodotti monitorati: {len(wl)}\n"
         f"Tag Amazon: {get_affiliate_tag() or '(nessuno)'}\n"
         f"Routing Amazon: {'Skimlinks' if route_via_skimlinks() else 'tag nativo'}\n"
+        f"Negozi mappati: {len(s.get('merchants', {}))}\n"
         f"AI: {_ai_status()}\n"
         f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}\n"
         f"Video: {'attivo' if video_enabled() else 'disattivo'}\n"
@@ -1670,6 +1701,66 @@ async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"✅ Routing Amazon: <b>{'Skimlinks' if via else 'tag nativo (' + (get_affiliate_tag() or 'nessun tag') + ')'}</b>",
         parse_mode=ParseMode.HTML,
     )
+
+
+async def setmerchant_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if len(context.args) < 2 or "{url}" not in context.args[1]:
+        await update.message.reply_text(
+            "Uso: /setmerchant <dominio> <template_con_{url}>\n\n"
+            "Esempi:\n"
+            "/setmerchant zooplus.it https://www.awin1.com/cread.php?awinmid=XXXX&awinaffid=YYYY&ued={url}\n"
+            "/setmerchant vodafone.it https://clk.tradedoubler.com/click?p=XXXX&a=YYYY&url={url}\n\n"
+            "Se un dominio non è in mappa, si usa Skimlinks. (Amazon resta col tuo tag.)"
+        )
+        return
+    domain = context.args[0].lower().replace("www.", "").strip()
+    tmpl = context.args[1].strip()
+    s = load_settings()
+    merchants = s.get("merchants", {})
+    merchants[domain] = tmpl
+    s["merchants"] = merchants
+    save_settings(s)
+    await update.message.reply_text(f"✅ Negozio mappato: <b>{domain}</b>\n→ {tmpl}", parse_mode=ParseMode.HTML)
+
+
+async def merchants_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    merchants = load_settings().get("merchants", {})
+    if not merchants:
+        await update.message.reply_text(
+            "Nessun negozio mappato. Tutti i link (tranne Amazon) passano da Skimlinks.\n"
+            "Aggiungi con /setmerchant <dominio> <template_con_{url}>"
+        )
+        return
+    lines = ["<b>🗺️ Negozi mappati:</b>"]
+    for d, t in merchants.items():
+        lines.append(f"• <b>{d}</b> → {t[:60]}…")
+    lines.append("\nRimuovi con /delmerchant <dominio>")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def delmerchant_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args:
+        await update.message.reply_text("Uso: /delmerchant <dominio>")
+        return
+    domain = context.args[0].lower().replace("www.", "").strip()
+    s = load_settings()
+    merchants = s.get("merchants", {})
+    if domain in merchants:
+        del merchants[domain]
+        s["merchants"] = merchants
+        save_settings(s)
+        await update.message.reply_text(f"🗑️ Rimosso: {domain}")
+    else:
+        await update.message.reply_text("Dominio non trovato. Vedi /merchants")
 
 
 async def setvideo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1975,11 +2066,14 @@ def main():
     app.add_handler(CommandHandler("settag", settag_cmd))
     app.add_handler(CommandHandler("setrouting", setrouting_cmd))
     app.add_handler(CommandHandler("setvideo", setvideo_cmd))
+    app.add_handler(CommandHandler("setmerchant", setmerchant_cmd))
+    app.add_handler(CommandHandler("merchants", merchants_cmd))
+    app.add_handler(CommandHandler("delmerchant", delmerchant_cmd))
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
-    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_HELP)})$"
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_HELP)})$"
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
