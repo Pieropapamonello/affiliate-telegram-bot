@@ -2351,6 +2351,23 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("📸 Recupero info prodotto...")
         info = await get_product_info(url, is_amazon=(store_kind == "amazon"))
 
+        # Dati illeggibili (es. AliExpress che blocca l'IP): niente card vuota,
+        # mando comunque il link affiliato funzionante + nota.
+        if not info.get("title") and not info.get("image"):
+            short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
+            await status_msg.delete()
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            await update.message.chat.send_message(
+                f"🛍️ <b>Offerta {info.get('source') or ''}</b>\n"
+                f"<i>(dettagli prodotto non leggibili da questo store)</i>\n\n🛒 {short_url}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=buy_button(short_url),
+            )
+            return
+
         price_f = parse_price_to_float(info.get("price"))
         # Recensione AI solo se ho letto un titolo reale (evita testi generici/fuffa)
         has_real_title = bool(info.get("title")) and len(info.get("title") or "") > 5
