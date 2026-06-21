@@ -422,29 +422,55 @@ def parse_price_to_float(price_str) -> float:
 # ----------------------------------------------------------------------------
 # Scraping prodotto (Amazon dettagliato, altri store via Open Graph)
 # ----------------------------------------------------------------------------
-async def fetch_html(url: str) -> str:
-    for user_agent in USER_AGENTS:
-        try:
-            headers = {
-                "User-Agent": user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Upgrade-Insecure-Requests": "1",
-                "Cache-Control": "no-cache",
-            }
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                response = await client.get(url, headers=headers)
-                if response.status_code == 200 and len(response.text) > 500:
-                    return response.text
-                logger.warning(f"fetch_html status {response.status_code} len {len(response.text)} for {url[:60]}")
-        except Exception as e:
-            logger.warning(f"fetch_html error: {e}")
-            continue
+async def fetch_html(url: str, attempts: int = 2) -> str:
+    headers_base = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "no-cache",
+    }
+    for _ in range(attempts):
+        for user_agent in USER_AGENTS:
+            try:
+                headers = dict(headers_base, **{"User-Agent": user_agent})
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    response = await client.get(url, headers=headers)
+                    # pagina valida = ricca (le pagine anti-bot sono corte). Amazon/og recuperati comunque.
+                    if response.status_code == 200 and len(response.text) > 3000:
+                        return response.text
+            except Exception as e:
+                logger.warning(f"fetch_html error: {e}")
+                continue
     return ""
+
+
+async def fetch_via_jina(url: str) -> str:
+    """Scarica la pagina tramite Jina Reader (IP non bloccato). Ritorna markdown/testo."""
+    try:
+        async with httpx.AsyncClient(timeout=40.0, follow_redirects=True) as client:
+            r = await client.get("https://r.jina.ai/" + url, headers={"User-Agent": USER_AGENTS[0]})
+            if r.status_code == 200 and len(r.text) > 80:
+                return r.text
+    except Exception as e:
+        logger.warning(f"jina error: {e}")
+    return ""
+
+
+def _jina_extract(text: str) -> tuple:
+    """Estrae (title, image) dal markdown di Jina Reader."""
+    title = None
+    m = re.search(r"^Title:\s*(.+)$", text or "", re.M)
+    if m:
+        title = re.sub(r"\s*[-|]\s*AliExpress.*$", "", m.group(1).strip()).strip() or None
+    img = None
+    im = re.search(r"https://ae0?1\.alicdn\.com/kf/[A-Za-z0-9]+\.(?:jpg|jpeg|png|webp)", text or "")
+    if im:
+        img = im.group(0)
+    return title, img
 
 
 EMPTY_INFO = {
@@ -633,6 +659,12 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
     if not html:
         info = dict(EMPTY_INFO)
         info["source"] = store_name_from_url(url)
+        # Fallback Jina Reader (IP non bloccato) per store come AliExpress
+        if not is_amazon:
+            jt = await fetch_via_jina(url)
+            if jt:
+                t, img = _jina_extract(jt)
+                info["title"], info["image"] = t, img
         return info
     soup = BeautifulSoup(html, "html.parser")
 
@@ -679,6 +711,14 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
                 val = m.group(1)
                 info["price"] = val if "€" in val or "," in val else f"{val}€"
                 break
+
+    # Fallback Jina se titolo/immagine ancora mancanti
+    if not info["title"] or not info["image"]:
+        jt = await fetch_via_jina(url)
+        if jt:
+            t, img = _jina_extract(jt)
+            info["title"] = info["title"] or t
+            info["image"] = info["image"] or img
     return info
 
 
@@ -1262,40 +1302,58 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
 
     draw = ImageDraw.Draw(bg)
 
-    # Titolo prodotto (max 2 righe), centrato in alto
-    title_bottom = 150
-    if title:
-        ft = _font(46)
-        lines = _wrap(draw, title, ft, 920, 2)
-        ty = 150
+    prod = None
+    if img_bytes:
+        try:
+            prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        except Exception:
+            prod = None
+
+    if prod is not None:
+        # --- Layout CON immagine prodotto ---
+        title_bottom = 150
+        if title:
+            ft = _font(46)
+            lines = _wrap(draw, title, ft, 920, 2)
+            ty = 150
+            for ln in lines:
+                lw = draw.textlength(ln, font=ft)
+                draw.text(((W - lw) / 2 + 2, ty + 2), ln, font=ft, fill=(0, 0, 0))
+                draw.text(((W - lw) / 2, ty), ln, font=ft, fill=(245, 245, 245))
+                ty += 58
+            title_bottom = ty + 12
+
+        pad = 34
+        footer_h = 120 + (84 if is_min else 0)
+        card_top = max(title_bottom, 160)
+        avail_h = (H - footer_h - 40) - card_top - 28
+        prod_max_h = max(300, min(560, avail_h - 2 * pad))
+        prod.thumbnail((800, prod_max_h))
+        cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
+        cx, cy = (W - cw) // 2, card_top
+        shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=44, fill=(0, 0, 0, 170)
+        )
+        shadow = shadow.filter(ImageFilter.GaussianBlur(24))
+        bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
+        card = _rounded((cw, ch), 44, (255, 255, 255, 255))
+        card.paste(prod, (pad, pad), prod)
+        bg.paste(card, (cx, cy), card)
+        draw = ImageDraw.Draw(bg)
+        y_after = cy + ch + 36
+    else:
+        # --- Layout SENZA immagine: titolo grande centrato ---
+        ft = _font(62)
+        lines = _wrap(draw, title or "Offerta", ft, 920, 4)
+        block_h = len(lines) * 76
+        ty = max(300, (H - block_h) // 2 - 40)
         for ln in lines:
             lw = draw.textlength(ln, font=ft)
             draw.text(((W - lw) / 2 + 2, ty + 2), ln, font=ft, fill=(0, 0, 0))
             draw.text(((W - lw) / 2, ty), ln, font=ft, fill=(245, 245, 245))
-            ty += 58
-        title_bottom = ty + 12
-
-    # Prodotto + ombra — dimensione adattiva (più grande possibile senza sforare)
-    pad = 34
-    footer_h = 120 + (84 if is_min else 0)        # spazio riservato a ribbon+brand
-    card_top = max(title_bottom, 160)
-    avail_h = (H - footer_h - 40) - card_top - 28  # altezza disponibile per la card
-    prod_max_h = max(300, min(560, avail_h - 2 * pad))
-    prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    prod.thumbnail((800, prod_max_h))
-    cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
-    cx, cy = (W - cw) // 2, card_top
-    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle(
-        [cx + 8, cy + 20, cx + cw + 8, cy + ch + 20], radius=44, fill=(0, 0, 0, 170)
-    )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(24))
-    bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
-    card = _rounded((cw, ch), 44, (255, 255, 255, 255))
-    card.paste(prod, (pad, pad), prod)
-    bg.paste(card, (cx, cy), card)
-
-    draw = ImageDraw.Draw(bg)
+            ty += 76
+        y_after = ty + 30
 
     # Badge store (in alto a sinistra)
     if store:
@@ -1330,8 +1388,7 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
             draw.text((sx + (sw - ow) / 2, oy), ot, font=fo, fill=(210, 210, 210))
             draw.line([sx + (sw - ow) / 2, oy + 19, sx + (sw + ow) / 2, oy + 19], fill=(210, 210, 210), width=3)
 
-    # Ribbon "MINIMO STORICO"
-    y_after = cy + ch + 36
+    # Ribbon "MINIMO STORICO" (y_after calcolato nel layout sopra)
     if is_min:
         fr = _font(36)
         rt = "MINIMO STORICO"
@@ -1362,10 +1419,11 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
 
 async def generate_card_image(image_url, store, brand_text, price=None, old_price=None,
                               is_min=False, title=None) -> bytes:
-    if not image_url:
-        return None
-    img = await fetch_bytes(image_url)
-    if not img:
+    img = None
+    if image_url:
+        img = await fetch_bytes(image_url)
+    # Senza immagine ma con titolo → card "testuale" brandizzata (no card vuota)
+    if not img and not title:
         return None
     bg = None
     bgurl = get_bg_image_url()
@@ -1382,7 +1440,7 @@ async def generate_card_image(image_url, store, brand_text, price=None, old_pric
 
 async def get_post_photo(info: dict, price=None, old_price=None, is_min=False):
     """Card personalizzata (byte) se attiva, altrimenti URL immagine, altrimenti None."""
-    if card_enabled() and info.get("image"):
+    if card_enabled() and (info.get("image") or info.get("title")):
         card = await generate_card_image(
             info.get("image"), info.get("source"), get_brand_text(),
             price, old_price, is_min, info.get("title"),
