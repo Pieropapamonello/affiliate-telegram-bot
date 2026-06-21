@@ -49,6 +49,8 @@ AFFILIATE_TAG = os.environ.get("AFFILIATE_TAG", "")
 PAAPI_CLIENT_ID = os.environ.get("PAAPI_CLIENT_ID", "")
 PAAPI_CLIENT_SECRET = os.environ.get("PAAPI_CLIENT_SECRET", "")
 PAAPI_MARKETPLACE = os.environ.get("PAAPI_MARKETPLACE", "www.amazon.it")
+# Tag partner per le richieste PA-API (può differire dal tag dei link). Default: AFFILIATE_TAG.
+PAAPI_PARTNER_TAG = os.environ.get("PAAPI_PARTNER_TAG", "") or AFFILIATE_TAG
 PAAPI_SCOPE = os.environ.get("PAAPI_SCOPE", "creatorsapi::default")
 PAAPI_TOKEN_URL = os.environ.get("PAAPI_TOKEN_URL", "https://api.amazon.com/auth/o2/token")
 PAAPI_HOST = os.environ.get("PAAPI_HOST", "https://creatorsapi.amazon")
@@ -531,7 +533,7 @@ async def paapi_get_item(asin: str) -> dict:
             "customerReviews.starRating",
             "customerReviews.count",
         ],
-        "partnerTag": AFFILIATE_TAG,
+        "partnerTag": PAAPI_PARTNER_TAG,
         "partnerType": "Associate",
         "marketplace": PAAPI_MARKETPLACE,
     }
