@@ -11,8 +11,10 @@ Funzioni:
 """
 
 import os
+import io
 import json
 import time
+import asyncio
 import logging
 import threading
 import re
@@ -94,6 +96,9 @@ RTDB_URL = os.environ.get("RTDB_URL", "").rstrip("/")
 # YouTube Data API (per trovare un video pertinente e corto) — opzionale
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 VIDEO_MAX_SECONDS = int(os.environ.get("VIDEO_MAX_SECONDS", 180))
+
+# Immagine personalizzata (card) — prodotto + sfondo + scritta brand + badge store
+BRAND_TEXT = os.environ.get("BRAND_TEXT", "Affari di Nello")
 
 # AI per i testi dei post — opzionale. Provider in ordine: Groq > Gemini > Claude.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
@@ -1105,6 +1110,134 @@ def buy_button(short_url: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Acquista ora", url=short_url)]])
 
 
+# ----------------------------------------------------------------------------
+# Immagine personalizzata (card) con Pillow
+# ----------------------------------------------------------------------------
+STORE_COLORS = {
+    "Amazon": (255, 153, 0),
+    "AliExpress": (229, 57, 53),
+    "eBay": (0, 100, 210),
+    "Zalando": (255, 102, 0),
+    "Temu": (255, 102, 0),
+}
+
+
+async def fetch_bytes(url: str) -> bytes:
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": USER_AGENTS[0]})
+            if r.status_code == 200:
+                return r.content
+    except Exception as e:
+        logger.warning(f"fetch_bytes error: {e}")
+    return None
+
+
+def _font(size: int):
+    from PIL import ImageFont
+
+    for p in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _gradient(w: int, h: int):
+    from PIL import Image, ImageDraw
+
+    top, bot = (38, 40, 54), (12, 12, 18)
+    base = Image.new("RGB", (w, h), top)
+    d = ImageDraw.Draw(base)
+    for y in range(h):
+        r = int(top[0] + (bot[0] - top[0]) * y / h)
+        g = int(top[1] + (bot[1] - top[1]) * y / h)
+        b = int(top[2] + (bot[2] - top[2]) * y / h)
+        d.line([(0, y), (w, y)], fill=(r, g, b))
+    return base
+
+
+def _compose_card(img_bytes: bytes, store: str, brand_text: str, bg_bytes: bytes = None) -> bytes:
+    from PIL import Image, ImageDraw, ImageOps
+
+    W = H = 1080
+    # Sfondo
+    if bg_bytes:
+        try:
+            bg = ImageOps.fit(Image.open(io.BytesIO(bg_bytes)).convert("RGB"), (W, H))
+            bg = Image.blend(bg, Image.new("RGB", (W, H), (0, 0, 0)), 0.45)
+        except Exception:
+            bg = _gradient(W, H)
+    else:
+        bg = _gradient(W, H)
+
+    # Prodotto su card bianca arrotondata
+    prod = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    prod.thumbnail((760, 620))
+    pad = 30
+    cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
+    card = Image.new("RGBA", (cw, ch), (255, 255, 255, 255))
+    card.paste(prod, (pad, pad), prod)
+    mask = Image.new("L", (cw, ch), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, cw, ch], radius=40, fill=255)
+    cx, cy = (W - cw) // 2, 150
+    bg.paste(card, (cx, cy), mask)
+
+    draw = ImageDraw.Draw(bg)
+    # Scritta brand sotto al prodotto
+    bt = brand_text or ""
+    if bt:
+        f = _font(72)
+        tw = draw.textlength(bt, font=f)
+        ty = cy + ch + 55
+        draw.text(((W - tw) / 2 + 3, ty + 3), bt, font=f, fill=(0, 0, 0))
+        draw.text(((W - tw) / 2, ty), bt, font=f, fill=(255, 255, 255))
+
+    # Badge store in alto a sinistra
+    if store:
+        badge = store.upper()
+        fb = _font(40)
+        bw = draw.textlength(badge, font=fb)
+        p = 22
+        col = STORE_COLORS.get(store, (33, 150, 243))
+        draw.rounded_rectangle([40, 40, 40 + bw + 2 * p, 106], radius=20, fill=col)
+        draw.text((40 + p, 52), badge, font=fb, fill=(255, 255, 255))
+
+    out = io.BytesIO()
+    bg.convert("RGB").save(out, "JPEG", quality=88)
+    return out.getvalue()
+
+
+async def generate_card_image(image_url: str, store: str, brand_text: str) -> bytes:
+    if not image_url:
+        return None
+    img = await fetch_bytes(image_url)
+    if not img:
+        return None
+    bg = None
+    bgurl = get_bg_image_url()
+    if bgurl:
+        bg = await fetch_bytes(bgurl)
+    try:
+        return await asyncio.to_thread(_compose_card, img, store, brand_text, bg)
+    except Exception as e:
+        logger.warning(f"card image error: {e}")
+        return None
+
+
+async def get_post_photo(info: dict):
+    """Ritorna i byte della card personalizzata se attiva, altrimenti l'URL immagine, altrimenti None."""
+    if card_enabled() and info.get("image"):
+        card = await generate_card_image(info.get("image"), info.get("source"), get_brand_text())
+        if card:
+            return card
+    return info.get("image")
+
+
 def build_product_message(info: dict, short_url: str = None, user_name: str = None,
                           review: str = None, price_line: str = None) -> str:
     title = one_line(info.get("title") or "Prodotto")
@@ -1361,6 +1494,18 @@ def video_enabled() -> bool:
     return load_settings().get("video_enabled", True)
 
 
+def card_enabled() -> bool:
+    return load_settings().get("card_enabled", True)
+
+
+def get_brand_text() -> str:
+    return load_settings().get("brand_text") or BRAND_TEXT
+
+
+def get_bg_image_url() -> str:
+    return load_settings().get("bg_image_url", "")
+
+
 def get_merchant_template(url: str) -> str:
     """Deeplink dedicato per il dominio del merchant, se configurato dall'admin."""
     try:
@@ -1399,15 +1544,16 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
 
     destination = get_post_channel() or entry.get("chat_id")
     kb = buy_button(short_url)
+    photo = await get_post_photo(info)
 
     ai_text = await generate_ai_copy(info, f"Prezzo: {price_line}", short_url)
     if ai_text:
         body = ai_text.replace(short_url, "").strip()
         if hist.get("is_new_min"):
             body = "🔥 <b>MINIMO STORICO</b>\n" + body
-        if info.get("image"):
+        if photo:
             try:
-                await bot.send_photo(chat_id=destination, photo=info["image"], caption=body, reply_markup=kb)
+                await bot.send_photo(chat_id=destination, photo=photo, caption=body, reply_markup=kb)
                 mark_posted(entry["url"])
                 return
             except Exception as e:
@@ -1418,9 +1564,9 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
 
     # Fallback senza AI
     message = build_product_message(info, user_name=None, price_line=price_line)
-    if info.get("image"):
+    if photo:
         try:
-            await bot.send_photo(chat_id=destination, photo=info["image"], caption=message,
+            await bot.send_photo(chat_id=destination, photo=photo, caption=message,
                                  parse_mode=ParseMode.HTML, reply_markup=kb)
             mark_posted(entry["url"])
             return
@@ -1527,6 +1673,7 @@ BTN_DEAL = "🔥 Pubblica offerta"
 BTN_TOKENS = "🔑 Token Bitly"
 BTN_TAG = "🏷️ Tag Amazon"
 BTN_MERCHANTS = "🗺️ Negozi"
+BTN_CARD = "🎨 Grafica"
 BTN_HELP = "❓ Aiuto"
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -1535,7 +1682,7 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_CHANNEL, BTN_ADD],
         [BTN_DEAL, BTN_TOKENS],
         [BTN_TAG, BTN_MERCHANTS],
-        [BTN_HELP],
+        [BTN_CARD, BTN_HELP],
     ],
     resize_keyboard=True,
 )
@@ -1568,6 +1715,15 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif text == BTN_MERCHANTS:
         await merchants_cmd(update, context)
         await update.message.reply_text("➕ Aggiungi: /setmerchant <dominio> <template_con_{url}>")
+    elif text == BTN_CARD:
+        await update.message.reply_text(
+            "🎨 <b>Grafica card</b>\n"
+            f"Card: {'attiva' if card_enabled() else 'disattiva'}\n"
+            f"Scritta: {get_brand_text()}\n"
+            f"Sfondo: {get_bg_image_url() or 'automatico'}\n\n"
+            "/setcard on|off · /setbrand <testo> · /setbg <url|off>",
+            parse_mode=ParseMode.HTML,
+        )
     elif text == BTN_HELP:
         await start(update, context)
 
@@ -1650,6 +1806,7 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Tag Amazon: {get_affiliate_tag() or '(nessuno)'}\n"
         f"Routing Amazon: {'Skimlinks' if route_via_skimlinks() else 'tag nativo'}\n"
         f"Negozi mappati: {len(s.get('merchants', {}))}\n"
+        f"Card grafica: {'attiva' if card_enabled() else 'disattiva'} (scritta: {get_brand_text()})\n"
         f"AI: {_ai_status()}\n"
         f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}\n"
         f"Video: {'attivo' if video_enabled() else 'disattivo'}\n"
@@ -1776,6 +1933,61 @@ async def setvideo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     s["video_enabled"] = on
     save_settings(s)
     await update.message.reply_text(f"✅ Video {'attivati' if on else 'disattivati'}.")
+
+
+async def setbrand_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            f"Scritta attuale sulla card: <b>{get_brand_text()}</b>\nPer cambiarla: /setbrand <testo>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    text = " ".join(context.args).strip()[:40]
+    s = load_settings()
+    s["brand_text"] = text
+    save_settings(s)
+    await update.message.reply_text(f"✅ Scritta card impostata: <b>{text}</b>", parse_mode=ParseMode.HTML)
+
+
+async def setcard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args or context.args[0].lower() not in ("on", "off"):
+        cur = "attiva" if card_enabled() else "disattiva"
+        await update.message.reply_text(f"Card personalizzata: <b>{cur}</b>\nUso: /setcard on|off", parse_mode=ParseMode.HTML)
+        return
+    on = context.args[0].lower() == "on"
+    s = load_settings()
+    s["card_enabled"] = on
+    save_settings(s)
+    await update.message.reply_text(f"✅ Card personalizzata {'attivata' if on else 'disattivata'}.")
+
+
+async def setbg_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args:
+        cur = get_bg_image_url() or "(sfondo generato automaticamente)"
+        await update.message.reply_text(
+            f"Sfondo card: {cur}\n"
+            "Per impostarlo: /setbg <url_immagine>\nPer togliere: /setbg off"
+        )
+        return
+    val = context.args[0].strip()
+    s = load_settings()
+    if val.lower() in ("off", "none", "-"):
+        s["bg_image_url"] = ""
+        save_settings(s)
+        await update.message.reply_text("✅ Sfondo personalizzato rimosso (uso lo sfondo generato).")
+        return
+    s["bg_image_url"] = val
+    save_settings(s)
+    await update.message.reply_text("✅ Sfondo card impostato. Manda un prodotto per vedere l'anteprima.")
 
 
 async def addtoken_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2030,10 +2242,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception as e:
                 logger.warning(f"youtube send error: {e}")
 
-        # 3) Immagine
-        if info.get("image"):
+        # 3) Foto personalizzata (card) se attiva, altrimenti immagine prodotto
+        photo = await get_post_photo(info)
+        if photo:
             try:
-                await chat.send_photo(photo=info["image"], caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
                 return
             except Exception as e:
                 logger.warning(f"Photo error: {e}")
@@ -2069,11 +2282,14 @@ def main():
     app.add_handler(CommandHandler("setmerchant", setmerchant_cmd))
     app.add_handler(CommandHandler("merchants", merchants_cmd))
     app.add_handler(CommandHandler("delmerchant", delmerchant_cmd))
+    app.add_handler(CommandHandler("setbrand", setbrand_cmd))
+    app.add_handler(CommandHandler("setcard", setcard_cmd))
+    app.add_handler(CommandHandler("setbg", setbg_cmd))
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
-    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_HELP)})$"
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_HELP)})$"
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
