@@ -342,17 +342,19 @@ def add_amazon_tag(url: str, tag: str) -> str:
 def build_affiliate_link(url: str) -> tuple:
     """Ritorna (affiliate_url, store_kind). store_kind in {amazon, aggregator, none}."""
     amazon = is_amazon_url(url)
+    tag = get_affiliate_tag()
+    via_skimlinks = route_via_skimlinks()
     # Amazon nativo (tag) salvo che si voglia far passare tutto da Skimlinks
-    if amazon and not (ROUTE_ALL_VIA_SKIMLINKS and DEEPLINK_TEMPLATE):
+    if amazon and not (via_skimlinks and DEEPLINK_TEMPLATE):
         normalized = normalize_amazon_url(url)
-        return add_amazon_tag(normalized, AFFILIATE_TAG), "amazon"
+        return add_amazon_tag(normalized, tag), "amazon"
     if DEEPLINK_TEMPLATE:
         target = normalize_amazon_url(url) if amazon else url
         affiliate = DEEPLINK_TEMPLATE.replace("{url}", quote_plus(target))
         return affiliate, "aggregator"
     if amazon:  # nessun aggregatore: ripiego sul tag nativo
         normalized = normalize_amazon_url(url)
-        return add_amazon_tag(normalized, AFFILIATE_TAG), "amazon"
+        return add_amazon_tag(normalized, tag), "amazon"
     return url, "none"
 
 
@@ -1159,6 +1161,17 @@ def get_bitly_tokens() -> list:
     return toks
 
 
+def get_affiliate_tag() -> str:
+    return load_settings().get("amazon_tag") or AFFILIATE_TAG
+
+
+def route_via_skimlinks() -> bool:
+    s = load_settings()
+    if "route_all_via_skimlinks" in s:
+        return bool(s["route_all_via_skimlinks"])
+    return ROUTE_ALL_VIA_SKIMLINKS
+
+
 # ----------------------------------------------------------------------------
 # Pubblicazione offerta (canale o utente)
 # ----------------------------------------------------------------------------
@@ -1291,6 +1304,7 @@ BTN_CHANNEL = "📢 Imposta canale"
 BTN_ADD = "➕ Aggiungi prodotto"
 BTN_DEAL = "🔥 Pubblica offerta"
 BTN_TOKENS = "🔑 Token Bitly"
+BTN_TAG = "🏷️ Tag Amazon"
 BTN_HELP = "❓ Aiuto"
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -1298,7 +1312,7 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_CONFIG, BTN_PRODUCTS],
         [BTN_CHANNEL, BTN_ADD],
         [BTN_DEAL, BTN_TOKENS],
-        [BTN_HELP],
+        [BTN_TAG, BTN_HELP],
     ],
     resize_keyboard=True,
 )
@@ -1325,6 +1339,9 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif text == BTN_TOKENS:
         await tokens_cmd(update, context)
         await update.message.reply_text("➕ Per aggiungerne: /addtoken <token1> <token2> ...")
+    elif text == BTN_TAG:
+        await settag_cmd(update, context)
+        await update.message.reply_text("Routing: /setrouting native|skimlinks")
     elif text == BTN_HELP:
         await start(update, context)
 
@@ -1404,9 +1421,56 @@ async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Canale: {s.get('channel') or CHANNEL_ID or '(nessuno → posta in chat)'}\n"
         f"Admin: {len(s.get('admins', []))}\n"
         f"Prodotti monitorati: {len(wl)}\n"
+        f"Tag Amazon: {get_affiliate_tag() or '(nessuno)'}\n"
+        f"Routing Amazon: {'Skimlinks' if route_via_skimlinks() else 'tag nativo'}\n"
         f"AI: {_ai_status()}\n"
         f"YouTube API: {'sì' if YOUTUBE_API_KEY else 'no'}\n"
         f"Token Bitly: {len(get_bitly_tokens())}",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def settag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            f"Tag Amazon attuale: <b>{get_affiliate_tag() or '(nessuno)'}</b>\n"
+            "Per cambiarlo: /settag <tuotag-21>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    tag = context.args[0].strip()
+    s = load_settings()
+    s["amazon_tag"] = tag
+    save_settings(s)
+    note = ""
+    if route_via_skimlinks():
+        note = "\n\n⚠️ Ora i link Amazon passano da Skimlinks, quindi questo tag NON viene usato. Per usarlo: /setrouting native"
+    await update.message.reply_text(f"✅ Tag Amazon impostato: <b>{tag}</b>{note}", parse_mode=ParseMode.HTML)
+
+
+async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    if not context.args or context.args[0].lower() not in ("native", "skimlinks"):
+        cur = "Skimlinks" if route_via_skimlinks() else "tag nativo"
+        await update.message.reply_text(
+            f"Routing Amazon attuale: <b>{cur}</b>\n"
+            "Per cambiarlo:\n"
+            "• /setrouting native  → usa il TUO tag (commissione piena)\n"
+            "• /setrouting skimlinks → passa tutto da Skimlinks",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    via = context.args[0].lower() == "skimlinks"
+    s = load_settings()
+    s["route_all_via_skimlinks"] = via
+    save_settings(s)
+    await update.message.reply_text(
+        f"✅ Routing Amazon: <b>{'Skimlinks' if via else 'tag nativo (' + (get_affiliate_tag() or 'nessun tag') + ')'}</b>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -1690,11 +1754,13 @@ def main():
     app.add_handler(CommandHandler("addtoken", addtoken_cmd))
     app.add_handler(CommandHandler("tokens", tokens_cmd))
     app.add_handler(CommandHandler("cleartokens", cleartokens_cmd))
+    app.add_handler(CommandHandler("settag", settag_cmd))
+    app.add_handler(CommandHandler("setrouting", setrouting_cmd))
     app.add_handler(CommandHandler("watch", watch_cmd))
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
-    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_HELP)})$"
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_HELP)})$"
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
