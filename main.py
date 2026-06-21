@@ -21,7 +21,13 @@ from urllib.parse import urlencode, parse_qs, urlparse, quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
-from telegram import Update, LinkPreviewOptions, ReplyKeyboardMarkup
+from telegram import (
+    Update,
+    LinkPreviewOptions,
+    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -70,6 +76,8 @@ YOURLS_SIGNATURE = os.environ.get("YOURLS_SIGNATURE", "")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "")  # @canale o -100123... per auto-post
 CHECK_INTERVAL_MIN = int(os.environ.get("CHECK_INTERVAL_MIN", 60))  # ogni quanto controlla i prezzi
 DISCOUNT_THRESHOLD = float(os.environ.get("DISCOUNT_THRESHOLD", 10))  # % calo minimo per alert
+ANTIDUP_DAYS = float(os.environ.get("ANTIDUP_DAYS", 2))  # non ripubblicare lo stesso prodotto entro N giorni
+SCHEDULED_POST_HOURS = float(os.environ.get("SCHEDULED_POST_HOURS", 0))  # 0 = disattivato
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
@@ -1082,16 +1090,21 @@ def max_lines(text: str, n: int = 3, line_len: int = 90) -> str:
     return "\n".join(lines[:n])
 
 
-def build_product_message(info: dict, short_url: str, user_name: str = None, review: str = None) -> str:
+def buy_button(short_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Acquista ora", url=short_url)]])
+
+
+def build_product_message(info: dict, short_url: str = None, user_name: str = None,
+                          review: str = None, price_line: str = None) -> str:
     title = one_line(info.get("title") or "Prodotto")
-    price = info.get("price") or ""
     rating = info.get("rating") or ""
     condition = info.get("condition_status") or ""
-    promotion = info.get("promotion") or ""
-    coupon = info.get("coupon") or ""
     source = info.get("source") or ""
 
-    clean_price = re.sub(r"€.*", "€", price).strip() if price else ""
+    if not price_line:
+        price = info.get("price") or ""
+        clean_price = re.sub(r"€.*", "€", price).strip() if price else ""
+        price_line = clean_price
 
     rating_stars = ""
     if rating:
@@ -1102,27 +1115,26 @@ def build_product_message(info: dict, short_url: str, user_name: str = None, rev
 
     msg = ""
     if user_name:
-        msg += f"<b>👤:</b> {user_name} ha condiviso questo articolo\n\n"
-    msg += f"<b>📌 Articolo:</b>\n{title}\n\n"
+        msg += f"👤 {user_name} ha condiviso questo articolo\n\n"
+    msg += f"📌 <b>{title}</b>\n"
     if source:
-        msg += f"<b>🏪 Store:</b> {source}\n\n"
-    if condition:
-        msg += f"<b>🔄 Venditore:</b> {condition}\n\n"
-    if clean_price:
-        msg += f"<b>💰 Prezzo:</b> {clean_price}\n\n"
+        msg += f"🏪 {source}"
+        # mostra il venditore solo se è "Usato" (info utile); altrimenti lo ometto
+        if condition and "Usato" in condition:
+            msg += f" · {condition}"
+        msg += "\n"
+    if price_line:
+        msg += f"💰 <b>{price_line}</b>\n"
     if rating_stars:
-        msg += f"{rating_stars}\n\n"
+        msg += f"{rating_stars}\n"
     if review:
         rev = max_lines(review, 3, line_len=70)
         if len(rev) > 200:
             rev = rev[:200].rsplit(" ", 1)[0] + "…"
-        msg += f"<b>📝 Recensione:</b>\n{rev}\n\n"
-    if promotion:
-        msg += f"<b>🎉 Promozione:</b> {promotion}\n\n"
-    if coupon:
-        msg += f"<b>🎟️ Coupon:</b> {coupon}\n\n"
-    msg += f"<b>🛒 Acquista qui:</b>\n{short_url}"
-    return msg
+        msg += f"\n📝 {rev}\n"
+    if short_url:
+        msg += f"\n🛒 {short_url}"
+    return msg.strip()
 
 
 # ----------------------------------------------------------------------------
@@ -1161,22 +1173,36 @@ def save_watchlist(wl: list) -> None:
 # ----------------------------------------------------------------------------
 # Impostazioni bot (admin, canale) — Firestore o file
 # ----------------------------------------------------------------------------
+_settings_cache = {"data": None, "ts": 0.0}
+SETTINGS_TTL = 30  # secondi
+
+
 def load_settings() -> dict:
+    now = time.time()
+    if _settings_cache["data"] is not None and (now - _settings_cache["ts"]) < SETTINGS_TTL:
+        return _settings_cache["data"]
+    data = {}
     if USE_FIRESTORE:
         try:
             doc = firestore_db.collection("bot").document("settings").get()
-            return doc.to_dict() if doc.exists else {}
+            data = doc.to_dict() if doc.exists else {}
         except Exception as e:
             logger.error(f"settings load error: {e}")
-            return {}
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+            data = _settings_cache["data"] or {}
+    else:
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    _settings_cache["data"] = data
+    _settings_cache["ts"] = now
+    return data
 
 
 def save_settings(s: dict) -> None:
+    _settings_cache["data"] = s
+    _settings_cache["ts"] = time.time()
     if USE_FIRESTORE:
         try:
             firestore_db.collection("bot").document("settings").set(s)
@@ -1189,6 +1215,103 @@ def save_settings(s: dict) -> None:
             json.dump(s, f, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"settings save error: {e}")
+
+
+# ----------------------------------------------------------------------------
+# Cronologia prezzi (minimo storico) + anti-duplicato
+# ----------------------------------------------------------------------------
+def _product_key(url: str) -> str:
+    asin = extract_asin_from_url(url or "")
+    if asin:
+        return asin
+    return re.sub(r"\W+", "", (url or ""))[:80] or "x"
+
+
+def _load_price_rec(key: str) -> dict:
+    if USE_FIRESTORE:
+        try:
+            doc = firestore_db.collection("prices").document(key).get()
+            return doc.to_dict() if doc.exists else {}
+        except Exception as e:
+            logger.warning(f"price load error: {e}")
+            return {}
+    try:
+        with open(os.path.join(DATA_DIR, "prices.json"), "r", encoding="utf-8") as f:
+            return json.load(f).get(key, {})
+    except Exception:
+        return {}
+
+
+def _save_price_rec(key: str, rec: dict) -> None:
+    if USE_FIRESTORE:
+        try:
+            firestore_db.collection("prices").document(key).set(rec)
+            return
+        except Exception as e:
+            logger.warning(f"price save error: {e}")
+            return
+    path = os.path.join(DATA_DIR, "prices.json")
+    try:
+        alld = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                alld = json.load(f)
+        except Exception:
+            alld = {}
+        alld[key] = rec
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(alld, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"price save error: {e}")
+
+
+def record_observation(url: str, price: float) -> dict:
+    """Registra il prezzo osservato e ritorna info sul minimo storico.
+    Ritorna {min, prev_min, is_new_min, seen} (price può essere None)."""
+    key = _product_key(url)
+    rec = _load_price_rec(key)
+    prev_min = rec.get("min")
+    seen = rec.get("seen", 0)
+    is_new_min = False
+    new_min = prev_min
+    if price is not None:
+        if prev_min is None or price < prev_min:
+            new_min = price
+            is_new_min = seen > 0  # "minimo storico" solo se l'avevamo già visto prima
+        rec["min"] = new_min
+        rec["last"] = price
+        rec["seen"] = seen + 1
+        rec["ts"] = int(time.time())
+        _save_price_rec(key, rec)
+    return {"min": new_min, "prev_min": prev_min, "is_new_min": is_new_min, "seen": seen}
+
+
+def build_price_line(price: float, hist: dict, old_price: float = None) -> str:
+    """Riga prezzo con minimo storico / sconto."""
+    if price is None:
+        return ""
+    line = f"{price:.2f}€"
+    if old_price and old_price > price:
+        drop = round((1 - price / old_price) * 100)
+        line += f"  (era {old_price:.2f}€, -{drop}%)"
+    if hist and hist.get("is_new_min"):
+        line += "  🔥 minimo storico!"
+    elif hist and hist.get("min") and price > hist["min"]:
+        line += f"  (min: {hist['min']:.2f}€)"
+    return line
+
+
+def already_posted_recently(url: str, days: int) -> bool:
+    rec = _load_price_rec(_product_key(url))
+    lp = rec.get("last_posted")
+    return lp is not None and (time.time() - lp) < days * 86400
+
+
+def mark_posted(url: str) -> None:
+    key = _product_key(url)
+    rec = _load_price_rec(key)
+    rec["last_posted"] = int(time.time())
+    _save_price_rec(key, rec)
 
 
 def is_admin(user_id: int) -> bool:
@@ -1234,16 +1357,9 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
     affiliate_url, kind = build_affiliate_link(entry["url"])
     short_url = await shorten_url(affiliate_url, use_bitly=(kind == "amazon"))
 
-    if current_price is not None:
-        if old_price and old_price > current_price:
-            drop = round((1 - current_price / old_price) * 100)
-            price_line = f"Prezzo: {current_price:.2f}€ (era {old_price:.2f}€, -{drop}%)"
-        else:
-            price_line = f"Prezzo: {current_price:.2f}€"
-    else:
-        price_line = "Prezzo: n/d"
+    hist = record_observation(entry["url"], current_price)
+    price_line = build_price_line(current_price, hist, old_price) or "n/d"
 
-    # Feed live offerte sul Realtime Database (se configurato)
     await rtdb_push(
         "deals",
         {
@@ -1256,38 +1372,37 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
         },
     )
 
-    ai_text = await generate_ai_copy(info, price_line, short_url)
-    target = entry.get("chat_id")
-    destination = get_post_channel() or target
+    destination = get_post_channel() or entry.get("chat_id")
+    kb = buy_button(short_url)
 
+    ai_text = await generate_ai_copy(info, f"Prezzo: {price_line}", short_url)
     if ai_text:
-        body = ai_text
-        if short_url not in body:
-            body += f"\n\n{short_url}"
+        body = ai_text.replace(short_url, "").strip()
+        if hist.get("is_new_min"):
+            body = "🔥 <b>MINIMO STORICO</b>\n" + body
         if info.get("image"):
             try:
-                await bot.send_photo(chat_id=destination, photo=info["image"], caption=body)
+                await bot.send_photo(chat_id=destination, photo=info["image"], caption=body, reply_markup=kb)
+                mark_posted(entry["url"])
                 return
             except Exception as e:
                 logger.warning(f"send_photo error: {e}")
-        await bot.send_message(chat_id=destination, text=body, disable_web_page_preview=False)
+        await bot.send_message(chat_id=destination, text=body, reply_markup=kb, disable_web_page_preview=True)
+        mark_posted(entry["url"])
         return
 
-    # Fallback senza AI: messaggio HTML strutturato
-    info2 = dict(info)
-    if current_price is not None and not info2.get("price"):
-        info2["price"] = f"{current_price:.2f}€"
-    message = build_product_message(info2, short_url)
-    if old_price and current_price and old_price > current_price:
-        drop = round((1 - current_price / old_price) * 100)
-        message = f"<b>🔥 PREZZO IN CALO -{drop}%</b>\n\n" + message
+    # Fallback senza AI
+    message = build_product_message(info, user_name=None, price_line=price_line)
     if info.get("image"):
         try:
-            await bot.send_photo(chat_id=destination, photo=info["image"], caption=message, parse_mode=ParseMode.HTML)
+            await bot.send_photo(chat_id=destination, photo=info["image"], caption=message,
+                                 parse_mode=ParseMode.HTML, reply_markup=kb)
+            mark_posted(entry["url"])
             return
         except Exception as e:
             logger.warning(f"send_photo error: {e}")
-    await bot.send_message(chat_id=destination, text=message, parse_mode=ParseMode.HTML)
+    await bot.send_message(chat_id=destination, text=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+    mark_posted(entry["url"])
 
 
 # ----------------------------------------------------------------------------
@@ -1314,6 +1429,10 @@ async def monitor_prices(context: ContextTypes.DEFAULT_TYPE) -> None:
             elif baseline and price <= baseline * (1 - DISCOUNT_THRESHOLD / 100):
                 alert = True
 
+            if alert and already_posted_recently(entry["url"], ANTIDUP_DAYS):
+                logger.info(f"Salto (anti-duplicato): {entry['url']}")
+                alert = False
+
             if alert:
                 logger.info(f"ALERT calo prezzo: {entry['url']} {baseline} -> {price}")
                 await publish_deal(context.bot, entry, info, price, baseline)
@@ -1323,6 +1442,28 @@ async def monitor_prices(context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as e:
             logger.error(f"monitor error per {entry.get('url')}: {e}")
     save_watchlist(wl)
+
+
+# ----------------------------------------------------------------------------
+# Job: post programmati (opzionale, SCHEDULED_POST_HOURS > 0)
+# ----------------------------------------------------------------------------
+async def scheduled_post(context: ContextTypes.DEFAULT_TYPE) -> None:
+    wl = load_watchlist()
+    if not wl or not get_post_channel():
+        return
+    # scegli il primo prodotto non pubblicato di recente
+    for entry in wl:
+        if already_posted_recently(entry["url"], ANTIDUP_DAYS):
+            continue
+        try:
+            info = await get_product_info(entry["url"], is_amazon=entry.get("is_amazon", False))
+            price = parse_price_to_float(info.get("price"))
+            await publish_deal(context.bot, entry, info, price)
+            logger.info(f"Post programmato pubblicato: {entry['url']}")
+            return
+        except Exception as e:
+            logger.error(f"scheduled_post error: {e}")
+    logger.info("Post programmato: nessun prodotto idoneo (tutti pubblicati di recente)")
 
 
 # ----------------------------------------------------------------------------
@@ -1750,8 +1891,12 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         info = await get_product_info(url, is_amazon=(store_kind == "amazon"))
 
         await status_msg.edit_text("📝 Scrivo la recensione...")
-        price_line = f"Prezzo: {info.get('price') or 'n/d'}"
-        review = await generate_ai_review(info, price_line)
+        price_f = parse_price_to_float(info.get("price"))
+        review = await generate_ai_review(info, f"Prezzo: {info.get('price') or 'n/d'}")
+
+        # Minimo storico
+        hist = record_observation(url, price_f)
+        price_line = build_price_line(price_f, hist) if price_f is not None else (info.get("price") or "")
 
         # Video: dal sito, altrimenti cercato su YouTube (se attivo e pertinente)
         video_url = info.get("video") if video_enabled() else None
@@ -1763,7 +1908,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
 
-        message = build_product_message(info, short_url, user.first_name, review=review)
+        message = build_product_message(info, user_name=user.first_name, review=review, price_line=price_line)
+        kb = buy_button(short_url)
         await status_msg.delete()
         try:
             await update.message.delete()
@@ -1772,20 +1918,21 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         chat = update.message.chat
 
-        # 1) Video direttamente dal sito → al posto dell'immagine
+        # 1) Video dal sito → nativo, al posto dell'immagine
         if video_url:
             try:
-                await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML)
+                await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
                 return
             except Exception as e:
                 logger.warning(f"send_video error: {e}")
 
-        # 2) Video trovato su YouTube → anteprima video al posto dell'immagine
+        # 2) Video YouTube pertinente → anteprima grande + bottone acquista
         if youtube_url:
             try:
                 await chat.send_message(
                     f"{message}\n\n🎥 <a href='{youtube_url}'>Guarda il video</a>",
                     parse_mode=ParseMode.HTML,
+                    reply_markup=kb,
                     link_preview_options=LinkPreviewOptions(url=youtube_url, prefer_large_media=True),
                 )
                 return
@@ -1795,13 +1942,13 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # 3) Immagine
         if info.get("image"):
             try:
-                await chat.send_photo(photo=info["image"], caption=message, parse_mode=ParseMode.HTML)
+                await chat.send_photo(photo=info["image"], caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
                 return
             except Exception as e:
                 logger.warning(f"Photo error: {e}")
 
         # 4) Solo testo
-        await chat.send_message(message, parse_mode=ParseMode.HTML)
+        await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
 
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
@@ -1839,6 +1986,9 @@ def main():
     if app.job_queue:
         app.job_queue.run_repeating(monitor_prices, interval=CHECK_INTERVAL_MIN * 60, first=60)
         logger.info("Monitor prezzi schedulato")
+        if SCHEDULED_POST_HOURS > 0:
+            app.job_queue.run_repeating(scheduled_post, interval=SCHEDULED_POST_HOURS * 3600, first=120)
+            logger.info(f"Post programmati ogni {SCHEDULED_POST_HOURS}h")
     else:
         logger.warning("JobQueue non disponibile: installa python-telegram-bot[job-queue]")
 
