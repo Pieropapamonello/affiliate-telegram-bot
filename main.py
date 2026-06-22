@@ -100,6 +100,11 @@ VIDEO_MAX_SECONDS = int(os.environ.get("VIDEO_MAX_SECONDS", 180))
 # Immagine personalizzata (card) — prodotto + sfondo + scritta brand + badge store
 BRAND_TEXT = os.environ.get("BRAND_TEXT", "Gli Affari di Nello")
 
+# Scontorno AI del prodotto (rembg/U2Net via onnxruntime). Funziona anche su sfondi complessi.
+# Disattivabile con CUTOUT_AI=0 se il piano Render va in OOM; in tal caso usa lo scontorno bianco.
+CUTOUT_AI = os.environ.get("CUTOUT_AI", "1").lower() in ("1", "true", "yes", "si")
+U2NET_MODEL_PATH = os.environ.get("U2NET_MODEL_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "u2netp.onnx"))
+
 # AI per i testi dei post — opzionale. Provider in ordine: Groq > Gemini > Claude.
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -1452,6 +1457,98 @@ def _fit_big(img, max_w, max_h):
     return img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
 
 
+_REMBG_SESSION = None
+_REMBG_TRIED = False
+
+
+def _get_rembg_session():
+    """Carica una sola volta la sessione onnxruntime per U2Net-p (lazy, leggera)."""
+    global _REMBG_SESSION, _REMBG_TRIED
+    if _REMBG_TRIED:
+        return _REMBG_SESSION
+    _REMBG_TRIED = True
+    if not CUTOUT_AI:
+        return None
+    try:
+        import onnxruntime as ort
+
+        if not os.path.exists(U2NET_MODEL_PATH):
+            logger.warning(f"Modello scontorno AI non trovato: {U2NET_MODEL_PATH}")
+            return None
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = 1
+        so.inter_op_num_threads = 1
+        _REMBG_SESSION = ort.InferenceSession(
+            U2NET_MODEL_PATH, sess_options=so, providers=["CPUExecutionProvider"]
+        )
+        logger.info("Scontorno AI (U2Net-p) attivo.")
+    except Exception as e:
+        logger.warning(f"Scontorno AI non disponibile: {e}")
+        _REMBG_SESSION = None
+    return _REMBG_SESSION
+
+
+def _cutout_ai(prod):
+    """Scontorna con U2Net-p (rembg) — funziona anche su sfondi complessi.
+    Ritorna (immagine_RGBA, scontornata_bool)."""
+    sess = _get_rembg_session()
+    if sess is None:
+        return None, False
+    try:
+        import numpy as np
+        from PIL import Image, ImageFilter
+
+        src = prod.convert("RGB")
+        # cap dimensione per memoria/CPU su piano free
+        work = src
+        if max(src.size) > 1024:
+            work = src.copy()
+            work.thumbnail((1024, 1024), Image.LANCZOS)
+
+        mean = (0.485, 0.456, 0.406)
+        std = (0.229, 0.224, 0.225)
+        im = work.resize((320, 320), Image.LANCZOS)
+        arr = np.array(im).astype(np.float32)
+        mx = arr.max() or 1.0
+        arr = arr / mx
+        tmp = np.zeros((320, 320, 3), dtype=np.float32)
+        for c in range(3):
+            tmp[:, :, c] = (arr[:, :, c] - mean[c]) / std[c]
+        tmp = tmp.transpose((2, 0, 1))[np.newaxis, :, :, :]
+
+        out = sess.run(None, {sess.get_inputs()[0].name: tmp})[0]
+        pred = out[:, 0, :, :]
+        mi, ma = pred.min(), pred.max()
+        pred = (pred - mi) / ((ma - mi) or 1.0)
+        mask = Image.fromarray((np.squeeze(pred) * 255).astype("uint8"), mode="L")
+        mask = mask.resize(src.size, Image.LANCZOS)
+        mask = mask.filter(ImageFilter.GaussianBlur(0.8))
+
+        # guard: maschera inutile (quasi vuota o quasi piena)
+        m = np.asarray(mask)
+        ratio = float((m > 40).mean())
+        if ratio < 0.03 or ratio > 0.99:
+            return None, False
+
+        out_img = src.convert("RGBA")
+        out_img.putalpha(mask)
+        bbox = out_img.getbbox()
+        if bbox:
+            out_img = out_img.crop(bbox)
+        return out_img, True
+    except Exception as e:
+        logger.warning(f"scontorno AI errore: {e}")
+        return None, False
+
+
+def _cutout(prod):
+    """Scontorna il prodotto: prima prova l'AI (sfondi complessi), poi lo sfondo bianco."""
+    cut, ok = _cutout_ai(prod)
+    if ok:
+        return cut, True
+    return _cutout_white_bg(prod)
+
+
 def _cutout_white_bg(prod):
     """Scontorna il prodotto rimuovendo lo sfondo bianco/uniforme (se presente).
     Ritorna (immagine_RGBA, scontornata_bool)."""
@@ -1532,7 +1629,7 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
         card_top = 150
         box_w = 920
         box_h = (H - footer_h - 40) - card_top - 10
-        cut, is_cut = _cutout_white_bg(prod)
+        cut, is_cut = _cutout(prod)
         if is_cut:
             # Prodotto scontornato, enorme, direttamente sullo sfondo (stile "Affari da Nerd")
             big = _fit_big(cut, box_w, box_h)
