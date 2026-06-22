@@ -448,6 +448,29 @@ async def fetch_html(url: str, attempts: int = 2) -> str:
     return ""
 
 
+CRAWLER_UAS = [
+    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+    "TelegramBot (like TwitterBot)",
+    "Twitterbot/1.0",
+    "WhatsApp/2.23.20.0",
+]
+
+
+async def fetch_og_html(url: str) -> str:
+    """Scarica la pagina con User-Agent da crawler social: store come AliExpress/Temu
+    servono gli og tag (titolo+immagine) ai crawler anche dai datacenter."""
+    for ua in CRAWLER_UAS:
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                r = await client.get(url, headers={"User-Agent": ua, "Accept-Language": "it-IT,it;q=0.9"})
+                if r.status_code == 200 and "og:title" in r.text:
+                    return r.text
+        except Exception as e:
+            logger.warning(f"fetch_og_html error: {e}")
+            continue
+    return ""
+
+
 async def fetch_via_jina(url: str) -> str:
     """Scarica la pagina tramite Jina Reader (IP non bloccato). Ritorna markdown/testo."""
     try:
@@ -671,10 +694,16 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
             return api_info
 
     html = await fetch_html(url)
+    # Store che bloccano i datacenter (AliExpress/Temu): riprova con UA da crawler
+    # social, che ricevono gli og tag (titolo + immagine).
+    if not is_amazon and (not html or "og:title" not in html):
+        crawler_html = await fetch_og_html(url)
+        if crawler_html:
+            html = crawler_html
+
     if not html:
         info = dict(EMPTY_INFO)
         info["source"] = store_name_from_url(url)
-        # Fallback Jina Reader (IP non bloccato) per store come AliExpress
         if not is_amazon:
             jt = await fetch_via_jina(url)
             if jt:
@@ -700,10 +729,16 @@ async def get_product_info(url: str, is_amazon: bool) -> dict:
 
     info = dict(EMPTY_INFO)
     info["title"] = meta_content(soup, "og:title") or (soup.title.get_text(strip=True) if soup.title else None)
-    info["image"] = meta_content(soup, "og:image")
+    info["image"] = meta_content(soup, "og:image") or meta_content(soup, "twitter:image")
     info["video"] = extract_page_video(soup)
     info["source"] = store_name_from_url(url)
     info["price"] = meta_content(soup, "product:price:amount") or meta_content(soup, "og:price:amount")
+
+    # Fallback immagine da CDN noti (es. Temu kwcdn, AliExpress alicdn)
+    if not info["image"]:
+        m = re.search(r'https://[a-z0-9.\-]*(?:kwcdn|alicdn|aliexpress-media)\.com/[^\s"\'\\)]+\.(?:jpg|jpeg|png|webp)', html)
+        if m:
+            info["image"] = m.group(0)
 
     # Fallback dati da JSON-LD (schema.org Product)
     ld = extract_jsonld_product(soup)
