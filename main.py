@@ -1441,6 +1441,65 @@ def _draw_store_chip(draw, bg, store, logo_bytes):
     draw.text((cx, y + (h - f.size) / 2 - 2), store, font=f, fill=(20, 20, 20))
 
 
+def _fit_big(img, max_w, max_h):
+    """Scala l'immagine (anche INGRANDENDOLA) per riempire l'area, mantenendo le proporzioni."""
+    from PIL import Image
+
+    w, h = img.size
+    if not w or not h:
+        return img
+    scale = min(max_w / w, max_h / h)
+    return img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+
+
+def _cutout_white_bg(prod):
+    """Scontorna il prodotto rimuovendo lo sfondo bianco/uniforme (se presente).
+    Ritorna (immagine_RGBA, scontornata_bool)."""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    im = prod.convert("RGB")
+    w, h = im.size
+    corners = [im.getpixel((1, 1)), im.getpixel((w - 2, 1)), im.getpixel((1, h - 2)), im.getpixel((w - 2, h - 2))]
+    if not all(min(c) >= 222 for c in corners):
+        return prod.convert("RGBA"), False  # sfondo non bianco → niente scontorno
+    work = im.copy()
+    SENT = (255, 0, 255)
+    seeds = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]
+    for s in seeds:
+        try:
+            ImageDraw.floodfill(work, s, SENT, thresh=34)
+        except Exception:
+            pass
+    alpha = Image.new("L", (w, h))
+    alpha.putdata([0 if p == SENT else 255 for p in work.getdata()])
+    alpha = alpha.filter(ImageFilter.GaussianBlur(0.8))
+    out = prod.convert("RGBA")
+    out.putalpha(alpha)
+    bbox = out.getbbox()
+    if bbox:
+        out = out.crop(bbox)
+    # se ha rimosso quasi tutto o quasi nulla, considera fallita
+    opaque = sum(1 for a in alpha.getdata() if a > 30)
+    if opaque < (w * h * 0.03) or opaque > (w * h * 0.985):
+        return prod.convert("RGBA"), False
+    return out, True
+
+
+def _drop_shadow(bg_rgb, obj_rgba, x, y, blur=18, offset=(6, 16), alpha=0.55):
+    """Aggiunge l'ombra di un oggetto RGBA su bg (RGB), ritorna RGB."""
+    from PIL import Image
+
+    W, H = bg_rgb.size
+    sh = Image.new("RGBA", obj_rgba.size, (0, 0, 0, 0))
+    sh.putalpha(obj_rgba.split()[3].point(lambda a: int(a * alpha)))
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    layer.paste(sh, (x + offset[0], y + offset[1]), sh)
+    from PIL import ImageFilter
+
+    layer = layer.filter(ImageFilter.GaussianBlur(blur))
+    return Image.alpha_composite(bg_rgb.convert("RGBA"), layer).convert("RGB")
+
+
 def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_price=None,
                   is_min=False, title=None, logo_bytes=None) -> bytes:
     from PIL import Image, ImageDraw, ImageOps, ImageFilter
@@ -1469,25 +1528,39 @@ def _compose_card(img_bytes, store, brand_text, bg_bytes=None, price=None, old_p
     footer_h = 130 + (84 if is_min else 0)
 
     if prod is not None:
-        # --- Prodotto GRANDE centrato (niente titolo sull'immagine) ---
-        card_top = 170
-        pad = 34
-        avail_h = (H - footer_h - 40) - card_top - 20
-        prod_max_h = max(360, min(640, avail_h - 2 * pad))
-        prod.thumbnail((830, prod_max_h))
-        cw, ch = prod.width + 2 * pad, prod.height + 2 * pad
-        cx, cy = (W - cw) // 2, card_top
-        shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rounded_rectangle(
-            [cx + 8, cy + 24, cx + cw + 8, cy + ch + 24], radius=46, fill=(0, 0, 0, 200)
-        )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(28))
-        bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
-        card = _rounded((cw, ch), 46, (255, 255, 255, 255))
-        card.paste(prod, (pad, pad), prod)
-        bg.paste(card, (cx, cy), card)
-        draw = ImageDraw.Draw(bg)
-        y_after = cy + ch + 42
+        # --- Prodotto GRANDISSIMO: scontornato sullo sfondo, oppure su card bianca ---
+        card_top = 150
+        box_w = 920
+        box_h = (H - footer_h - 40) - card_top - 10
+        cut, is_cut = _cutout_white_bg(prod)
+        if is_cut:
+            # Prodotto scontornato, enorme, direttamente sullo sfondo (stile "Affari da Nerd")
+            big = _fit_big(cut, box_w, box_h)
+            bx = (W - big.width) // 2
+            by = card_top + (box_h - big.height) // 2
+            bg = _drop_shadow(bg, big, bx, by, blur=22, offset=(8, 20), alpha=0.5)
+            bg_rgba = bg.convert("RGBA")
+            bg_rgba.paste(big, (bx, by), big)
+            bg = bg_rgba.convert("RGB")
+            draw = ImageDraw.Draw(bg)
+            y_after = by + big.height + 30
+        else:
+            # Sfondo non bianco: prodotto INGRANDITO su card bianca arrotondata
+            pad = 30
+            big = _fit_big(prod, box_w - 2 * pad, box_h - 2 * pad)
+            cw, ch = big.width + 2 * pad, big.height + 2 * pad
+            cx, cy = (W - cw) // 2, card_top + (box_h - ch) // 2
+            shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ImageDraw.Draw(shadow).rounded_rectangle(
+                [cx + 8, cy + 24, cx + cw + 8, cy + ch + 24], radius=46, fill=(0, 0, 0, 200)
+            )
+            shadow = shadow.filter(ImageFilter.GaussianBlur(28))
+            bg = Image.alpha_composite(bg.convert("RGBA"), shadow).convert("RGB")
+            card = _rounded((cw, ch), 46, (255, 255, 255, 255))
+            card.paste(big, (pad, pad), big)
+            bg.paste(card, (cx, cy), card)
+            draw = ImageDraw.Draw(bg)
+            y_after = cy + ch + 42
     else:
         # --- Senza immagine: titolo grande centrato ---
         ft = _font(60)
