@@ -1467,7 +1467,7 @@ def _cutout_white_bg(prod):
     seeds = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]
     for s in seeds:
         try:
-            ImageDraw.floodfill(work, s, SENT, thresh=34)
+            ImageDraw.floodfill(work, s, SENT, thresh=72)
         except Exception:
             pass
     alpha = Image.new("L", (w, h))
