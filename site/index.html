@@ -9,6 +9,7 @@
 <meta property="og:title" content="Gli Affari di Nello — Offerte e sconti">
 <meta property="og:description" content="Le migliori offerte online selezionate ogni giorno.">
 <meta property="og:type" content="website">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -122,16 +123,38 @@
   /* REVEAL */
   .reveal{opacity:0;transform:translateY(22px);transition:opacity .6s ease,transform .6s ease}
   .reveal.in{opacity:1;transform:none}
+  /* ARTICLES */
+  .acard{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;cursor:pointer;text-align:left;color:inherit;display:block;transition:transform .18s,border-color .18s,box-shadow .18s;font:inherit}
+  .acard:hover{transform:translateY(-5px);border-color:#3a4760;box-shadow:var(--shadow)}
+  .acard .cov{aspect-ratio:16/9;width:100%;object-fit:cover;display:block;background:#0c111a}
+  .acard .ab{padding:16px 18px}
+  .acard .ab .k{color:var(--acc);font-size:.72rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase}
+  .acard .ab h3{font-size:1.06rem;margin:.3em 0 0}
+  .acards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px}
+  /* MODAL */
+  .modal{position:fixed;inset:0;background:rgba(5,7,11,.78);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;z-index:50;padding:40px 16px;overflow:auto}
+  .modal.open{display:flex}
+  .modal .box{background:var(--bg2);border:1px solid var(--line);border-radius:20px;max-width:760px;width:100%;overflow:hidden}
+  .modal .box img{width:100%;display:block}
+  .modal .box .c{padding:26px 28px 32px}
+  .modal .box .k{color:var(--acc);font-size:.78rem;font-weight:700;letter-spacing:1px;text-transform:uppercase}
+  .modal .box h2{font-size:1.7rem;margin:8px 0 14px}
+  .modal .box .body p{color:#cdd4e0;margin:0 0 14px}
+  .modal .x{position:sticky;top:0;float:right;background:#0008;border:none;color:#fff;font-size:1.4rem;width:42px;height:42px;border-radius:50%;cursor:pointer;margin:10px}
 </style>
 </head>
 <body>
 
 <nav><div class="wrap">
-  <div class="logo">Gli Affari di <b>Nello</b></div>
+  <div class="logo" style="display:flex;align-items:center;gap:10px">
+    <svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff7a18"/><stop offset="1" stop-color="#ffb347"/></linearGradient></defs><rect x="4" y="4" width="56" height="56" rx="15" fill="url(#lg)"/><path d="M20 25 h24 l-2.2 22.5 a4 4 0 0 1-4 3.5 H26.2 a4 4 0 0 1-4-3.5 Z" fill="#241a00"/><path d="M25 25 v-2.5 a7 7 0 0 1 14 0 V25" fill="none" stroke="#241a00" stroke-width="3.4" stroke-linecap="round"/><circle cx="32" cy="37.5" r="3.1" fill="#ffb347"/></svg>
+    <span>Gli Affari di <b>Nello</b></span>
+  </div>
   <div class="navlinks">
     <a href="#offerte">Offerte</a>
     <a href="#come">Come funziona</a>
     <a href="#categorie">Categorie</a>
+    <a href="#guide">Guide</a>
     <a class="cta" id="navCta" href="https://t.me/nellinobuybot" target="_blank" rel="noopener">Entra nel canale</a>
   </div>
 </div></nav>
@@ -200,6 +223,11 @@
     </div>
   </div></section>
 
+  <section id="guide"><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">Dalla redazione</span><h2>Recensioni &amp; Guide</h2><p>Consigli e approfondimenti tech, aggiornati ogni giorno dal nostro staff.</p></div>
+    <div id="artGrid" class="acards reveal"><p class="muted">Caricamento articoli…</p></div>
+  </div></section>
+
   <section><div class="wrap">
     <div class="sec-head reveal"><span class="kick">Dubbi?</span><h2>Domande frequenti</h2></div>
     <div class="faq reveal">
@@ -238,6 +266,12 @@
   © <span id="y"></span> Gli Affari di Nello · Tutti i marchi citati appartengono ai rispettivi proprietari.
 </div></footer>
 
+<div class="modal" id="modal"><div class="box">
+  <button class="x" id="modalX" aria-label="Chiudi">×</button>
+  <img id="modalImg" alt="" src="">
+  <div class="c"><div class="k" id="modalK"></div><h2 id="modalT"></h2><div class="body" id="modalB"></div></div>
+</div></div>
+
 <script>
   document.getElementById('y').textContent = new Date().getFullYear();
 
@@ -251,9 +285,45 @@
   var io = new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
   document.querySelectorAll('.reveal').forEach(function(el){io.observe(el);});
 
-  // Offerte live dal bot (endpoint pubblico, CORS aperto)
-  var DEALS_API = "https://affiliate-telegram-bot-mrwf.onrender.com/deals.json";
+  // Base del bot (espone /deals.json, /articles.json, /img/article/<id>.png)
+  var BOT = "https://affiliate-telegram-bot-mrwf.onrender.com";
   function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  // Recensioni & Guide
+  var ARTS = {};
+  fetch(BOT + "/articles.json", {cache:"no-store"})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var items = (d && d.articles) || [];
+      var sec = document.getElementById('guide');
+      if (!items.length) { sec.style.display = 'none'; return; }
+      document.getElementById('artGrid').innerHTML = items.map(function(a){
+        ARTS[a.id] = a;
+        var cov = a.cover_b64 ? '' : (BOT + '/img/article/' + esc(a.id) + '.png');
+        return '<button class="acard" data-id="'+esc(a.id)+'">'
+          + '<img class="cov" loading="lazy" alt="" src="'+cov+'">'
+          + '<div class="ab"><div class="k">'+esc(a.category||'Guida')+'</div><h3>'+esc(a.title)+'</h3></div></button>';
+      }).join('');
+      document.querySelectorAll('.acard').forEach(function(el){
+        el.addEventListener('click', function(){ openArticle(el.getAttribute('data-id')); });
+      });
+    })
+    .catch(function(){ var s=document.getElementById('guide'); if(s) s.style.display='none'; });
+
+  function openArticle(id){
+    var a = ARTS[id]; if(!a) return;
+    document.getElementById('modalK').textContent = a.category || 'Guida';
+    document.getElementById('modalT').textContent = a.title;
+    document.getElementById('modalImg').src = BOT + '/img/article/' + id + '.png';
+    document.getElementById('modalB').innerHTML = (a.body||'').split(/\n\n+/).map(function(p){return '<p>'+esc(p)+'</p>';}).join('');
+    document.getElementById('modal').classList.add('open');
+  }
+  function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+  document.getElementById('modalX').addEventListener('click', closeModal);
+  document.getElementById('modal').addEventListener('click', function(e){ if(e.target.id==='modal') closeModal(); });
+
+  // Offerte live dal bot
+  var DEALS_API = BOT + "/deals.json";
   fetch(DEALS_API, {cache:"no-store"})
     .then(function(r){ return r.json(); })
     .then(function(d){

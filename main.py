@@ -235,8 +235,9 @@ SHORT_DOMAINS = ["amzn.eu", "amzn.com", "amzn.to", "amzlink.to", "a.co"]
 # ----------------------------------------------------------------------------
 # Health check server (Render Web Service ha bisogno di una porta aperta)
 # ----------------------------------------------------------------------------
-# Ultime offerte pubblicate (in memoria) — esposte in /deals.json per la landing page
-RECENT_DEALS = deque(maxlen=12)
+# Contenuti pubblicati (in memoria + Firestore) — esposti via HTTP per la landing page
+RECENT_DEALS = deque(maxlen=12)   # ultime offerte
+ARTICLES = deque(maxlen=20)       # articoli/recensioni della "redazione"
 
 
 def record_recent_deal(title, price_line=None, store=None, url=None, image=None):
@@ -250,22 +251,85 @@ def record_recent_deal(title, price_line=None, store=None, url=None, image=None)
             "url": url or "",
             "image": image or "",
         })
+        _persist_fs("recent_deals", {"items": list(RECENT_DEALS)})
     except Exception:
         pass
 
 
+def _persist_fs(doc_id, data):
+    """Salva un documento in Firestore (best-effort)."""
+    if not (USE_FIRESTORE and firestore_db):
+        return
+    try:
+        firestore_db.collection("bot").document(doc_id).set(data)
+    except Exception as e:
+        logger.warning(f"persist {doc_id} fs: {e}")
+
+
+def load_persisted_content():
+    """Ricarica offerte e articoli da Firestore all'avvio (così non si perde nulla)."""
+    if not (USE_FIRESTORE and firestore_db):
+        return
+    for doc_id, target in (("recent_deals", RECENT_DEALS), ("articles", ARTICLES)):
+        try:
+            doc = firestore_db.collection("bot").document(doc_id).get()
+            if doc.exists:
+                items = doc.to_dict().get("items", [])
+                target.clear()
+                for it in items[:target.maxlen]:
+                    target.append(it)
+                logger.info(f"Caricati {len(target)} elementi '{doc_id}' da Firestore")
+        except Exception as e:
+            logger.warning(f"load {doc_id} fs: {e}")
+
+
+def _json_response(handler, obj):
+    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    handler.send_response(200)
+    handler.send_header("Content-type", "application/json; charset=utf-8")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Cache-Control", "public, max-age=120")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # Feed pubblico delle ultime offerte (JSON, CORS aperto) per il sito statico
-        if self.path.rstrip("/").startswith("/deals"):
-            body = json.dumps({"deals": list(RECENT_DEALS)}, ensure_ascii=False).encode("utf-8")
+        path = self.path.split("?")[0].rstrip("/")
+        # Feed offerte
+        if path.startswith("/deals"):
+            return _json_response(self, {"deals": list(RECENT_DEALS)})
+        # Feed articoli/recensioni (senza il base64 della copertina)
+        if path.startswith("/articles"):
+            arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in ARTICLES]
+            return _json_response(self, {"articles": arts})
+        # Copertina articolo: /img/article/<id>.png (rigenerata al volo se non in cache)
+        if path.startswith("/img/article/"):
+            aid = path.rsplit("/", 1)[-1].replace(".png", "")
+            raw = b""
+            for a in ARTICLES:
+                if a.get("id") == aid:
+                    try:
+                        import base64
+                        if not a.get("cover_b64"):
+                            cover = _compose_article_cover(a.get("title") or "", a.get("category"))
+                            a["cover_b64"] = base64.b64encode(cover).decode("ascii")
+                        raw = base64.b64decode(a["cover_b64"])
+                    except Exception as e:
+                        logger.warning(f"cover regen: {e}")
+                    break
+            if not raw:
+                self.send_response(404)
+                self.end_headers()
+                return
             self.send_response(200)
-            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.send_header("Content-type", "image/png")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Cache-Control", "public, max-age=120")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(raw)
             return
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
@@ -1317,6 +1381,122 @@ async def _claude_chat(system: str, user: str, max_tokens: int = 400) -> str:
     except Exception as e:
         logger.error(f"Claude error: {e}")
         return None
+
+
+# ----------------------------------------------------------------------------
+# Redazione: articoli/recensioni tech generati ogni giorno (con copertina)
+# ----------------------------------------------------------------------------
+ARTICLE_TOPICS = [
+    ("Smartphone Android: come scegliere", "smartphone"),
+    ("Cuffie e auricolari wireless", "cuffie auricolari"),
+    ("Smart TV 4K: guida all'acquisto", "televisore monitor"),
+    ("Domotica e casa intelligente", "casa smart"),
+    ("Gaming e console: cosa sapere", "console gioco"),
+    ("Smartwatch e fitness tracker", "smartwatch tech"),
+    ("Robot aspirapolvere", "robot aspira casa"),
+    ("Tablet: quale comprare", "tablet"),
+    ("Power bank e ricarica rapida", "caricabatterie power tech"),
+    ("Monitor e PC da scrivania", "monitor laptop"),
+    ("Fotocamere e droni", "camera drone tech"),
+    ("Soundbar e audio per casa", "audio cuffie casa"),
+]
+
+ARTICLE_SYSTEM = (
+    "Sei un redattore tech italiano della testata 'Gli Affari di Nello'. "
+    "Scrivi un breve articolo-guida divulgativo e ORIGINALE sull'argomento richiesto, "
+    "utile a chi vuole comprare bene. Tono professionale ma amichevole, in italiano. "
+    "Non inventare prezzi né nomi di modelli specifici: parla di caratteristiche, "
+    "consigli d'acquisto e cosa valutare prima di comprare. "
+    "Formato ESATTO della risposta:\n"
+    "Riga 1: solo il TITOLO (max 70 caratteri, accattivante, senza virgolette)\n"
+    "Righe successive: il corpo in 3-4 paragrafi separati da una riga vuota (circa 250-350 parole)."
+)
+
+
+def _parse_article(text):
+    lines = (text or "").splitlines()
+    title = None
+    body_start = 0
+    for i, l in enumerate(lines):
+        if l.strip():
+            title = l.strip().strip("#* ").strip()
+            body_start = i + 1
+            break
+    if not title:
+        return None, None
+    title = re.sub(r"^(titolo|title)\s*[:\-]\s*", "", title, flags=re.I)
+    body = "\n".join(lines[body_start:]).strip()
+    return title[:90], body
+
+
+def _compose_article_cover(title, category_hint=None) -> bytes:
+    from PIL import Image, ImageDraw
+
+    W, H = 1200, 675
+    bg = _gradient(W, H, category_hint or title)
+    draw = ImageDraw.Draw(bg)
+    fk = _font(30)
+    draw.text((60, 54), "GLI AFFARI DI NELLO · REDAZIONE", font=fk, fill=ACCENT)
+    ft = _font(70)
+    lines = _wrap(draw, title, ft, W - 120, 4)
+    y = 150
+    for ln in lines:
+        draw.text((62, y + 2), ln, font=ft, fill=(0, 0, 0))
+        draw.text((60, y), ln, font=ft, fill=(245, 247, 252))
+        y += 84
+    draw.rounded_rectangle([60, y + 16, 210, y + 26], radius=5, fill=ACCENT)
+    fb = _font(32)
+    draw.text((60, H - 66), "Guida all'acquisto · gliaffaridinello", font=fb, fill=(212, 218, 228))
+    buf = io.BytesIO()
+    bg.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
+
+
+async def generate_daily_article(context=None):
+    """Genera (max 1 al giorno) un articolo tech con copertina, lo salva e lo pubblica."""
+    today = time.strftime("%Y-%m-%d")
+    if ARTICLES and ARTICLES[0].get("date") == today:
+        return  # già pubblicato oggi
+    idx = int(time.strftime("%j")) % len(ARTICLE_TOPICS)
+    topic, hint = ARTICLE_TOPICS[idx]
+    text = await _ai_complete(ARTICLE_SYSTEM, f"Argomento: {topic}", 700)
+    if not text:
+        logger.warning("Articolo non generato (AI non disponibile)")
+        return
+    title, body = _parse_article(text)
+    if not title or not body:
+        return
+    cover = None
+    cover_b64 = ""
+    try:
+        import base64
+        cover = await asyncio.to_thread(_compose_article_cover, title, hint)
+        cover_b64 = base64.b64encode(cover).decode("ascii")
+    except Exception as e:
+        logger.warning(f"cover articolo: {e}")
+    aid = today.replace("-", "") + f"{idx:02d}"
+    ARTICLES.appendleft({
+        "id": aid, "title": title, "body": body, "category": topic,
+        "date": today, "ts": int(time.time()), "cover_b64": cover_b64,
+    })
+    # In Firestore salvo solo il testo (le copertine si rigenerano al volo: niente limite 1MB)
+    _persist_fs("articles", {"items": [{k: v for k, v in a.items() if k != "cover_b64"} for a in ARTICLES]})
+    logger.info(f"Articolo generato: {title}")
+
+    channel = get_post_channel()
+    if channel and context is not None:
+        try:
+            import html as _html
+            excerpt = body.split("\n\n")[0][:600]
+            caption = (f"📰 <b>{_html.escape(title)}</b>\n\n{_html.escape(excerpt)}"
+                       f"\n\n<i>Redazione · Gli Affari di Nello</i>")
+            if cover:
+                await context.bot.send_photo(chat_id=channel, photo=io.BytesIO(cover),
+                                             caption=caption, parse_mode=ParseMode.HTML)
+            else:
+                await context.bot.send_message(chat_id=channel, text=caption, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.warning(f"post articolo canale: {e}")
 
 
 # ----------------------------------------------------------------------------
@@ -2936,6 +3116,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 def main():
     start_health_check_server()
     init_firestore()
+    load_persisted_content()  # ricarica offerte e articoli salvati (no perdita su restart)
     init_rtdb()
     # concurrent_updates=True: più link inviati di fila vengono elaborati in parallelo
     # (il lavoro pesante immagini/AI gira già in thread separati)
@@ -2973,6 +3154,9 @@ def main():
         if SCHEDULED_POST_HOURS > 0:
             app.job_queue.run_repeating(scheduled_post, interval=SCHEDULED_POST_HOURS * 3600, first=120)
             logger.info(f"Post programmati ogni {SCHEDULED_POST_HOURS}h")
+        # Articolo/recensione tech generato ogni giorno (stile redazione)
+        app.job_queue.run_repeating(generate_daily_article, interval=24 * 3600, first=180)
+        logger.info("Redazione: articolo giornaliero schedulato")
     else:
         logger.warning("JobQueue non disponibile: installa python-telegram-bot[job-queue]")
 
