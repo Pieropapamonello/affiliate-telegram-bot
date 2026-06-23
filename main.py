@@ -1012,11 +1012,39 @@ def extract_amazon_rating(soup) -> tuple:
     return rating, reviews
 
 
+def _amazon_hires_url(url: str) -> str:
+    """Trasforma un URL immagine Amazon ridimensionato (es. _SY300_SX300_ML2_) nella
+    versione ad alta risoluzione e PULITA (senza overlay marketing): <id>._AC_SL1200_.jpg"""
+    if not url:
+        return url
+    m = re.match(r"(https?://[^\s]+/I/[^.]+)\.[^/]+\.(jpg|jpeg|png)", url, re.I)
+    if m:
+        return f"{m.group(1)}._AC_SL1200_.{m.group(2)}"
+    return url
+
+
 def extract_amazon_image(soup) -> str:
-    for selector in [{"id": "landingImage"}, {"id": "imageBlockContainer"}, {"class": "a-dynamic-image"}]:
+    # Immagine principale ad ALTA risoluzione = vera foto prodotto intera (no thumbnail 300px,
+    # no overlay marketing _ML_). Risolve le card con prodotto "tagliato male".
+    li = soup.find("img", {"id": "landingImage"}) or soup.find("img", {"id": "imgTagWrapperId"})
+    if li:
+        hires = li.get("data-old-hires")
+        if hires:
+            return hires
+        dyn = li.get("data-a-dynamic-image")
+        if dyn:
+            try:
+                d = json.loads(dyn)
+                if d:
+                    return max(d.items(), key=lambda kv: (kv[1][0] * kv[1][1]) if len(kv[1]) == 2 else 0)[0]
+            except Exception:
+                pass
+        if li.get("src"):
+            return _amazon_hires_url(li["src"])
+    for selector in [{"id": "imageBlockContainer"}, {"class": "a-dynamic-image"}]:
         elem = soup.find("img", selector)
         if elem and elem.get("src"):
-            return elem["src"]
+            return _amazon_hires_url(elem["src"])
     return None
 
 
