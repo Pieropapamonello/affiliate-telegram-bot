@@ -2135,7 +2135,6 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
     )
 
     destination = get_post_channel() or entry.get("chat_id")
-    kb = buy_button(short_url)
     photo = await get_post_photo(info, price=current_price, old_price=old_price, is_min=hist.get("is_new_min"))
 
     review_link = None
@@ -2149,30 +2148,31 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
             body = "🔥 MINIMO STORICO\n" + body
         if review_link:
             body += f"\n\n🎥 Recensione: {review_link}"
+        body += f"\n\n🛒 {short_url}"  # link nel testo (copiabile), non come pulsante
         if photo:
             try:
-                await bot.send_photo(chat_id=destination, photo=photo, caption=body, reply_markup=kb)
+                await bot.send_photo(chat_id=destination, photo=photo, caption=body)
                 mark_posted(entry["url"])
                 return
             except Exception as e:
                 logger.warning(f"send_photo error: {e}")
-        await bot.send_message(chat_id=destination, text=body, reply_markup=kb, disable_web_page_preview=True)
+        await bot.send_message(chat_id=destination, text=body, disable_web_page_preview=True)
         mark_posted(entry["url"])
         return
 
     # Fallback senza AI
-    message = build_product_message(info, user_name=None, price_line=price_line)
+    message = build_product_message(info, short_url=short_url, user_name=None, price_line=price_line)
     if review_link:
         message += f"\n\n🎥 <a href='{review_link}'>Guarda la video-recensione</a>"
     if photo:
         try:
             await bot.send_photo(chat_id=destination, photo=photo, caption=message,
-                                 parse_mode=ParseMode.HTML, reply_markup=kb)
+                                 parse_mode=ParseMode.HTML)
             mark_posted(entry["url"])
             return
         except Exception as e:
             logger.warning(f"send_photo error: {e}")
-    await bot.send_message(chat_id=destination, text=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await bot.send_message(chat_id=destination, text=message, parse_mode=ParseMode.HTML)
     mark_posted(entry["url"])
 
 
@@ -2829,19 +2829,20 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
-        kb = buy_button(short_url)
         chat = update.message.chat
         sent = False  # cancelliamo il messaggio originale SOLO dopo un invio riuscito
 
         # --- CON immagine prodotto → card brandizzata ---
         if info.get("image"):
-            message = build_product_message(info, user_name=user.first_name, review=review, price_line=price_line)
+            # link d'acquisto DENTRO il testo (copiabile), non come pulsante
+            message = build_product_message(info, short_url=short_url, user_name=user.first_name,
+                                            review=review, price_line=price_line)
             if review_link:
                 message += f"\n\n🎥 <a href='{review_link}'>Guarda la video-recensione</a>"
             video_url = info.get("video") if video_enabled() else None
             if video_url:
                 try:
-                    await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                    await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML)
                     sent = True
                 except Exception as e:
                     logger.warning(f"send_video error: {e}")
@@ -2849,12 +2850,12 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 photo = await get_post_photo(info, price=price_f, is_min=hist.get("is_new_min"))
                 if photo:
                     try:
-                        await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                        await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML)
                         sent = True
                     except Exception as e:
                         logger.warning(f"Photo error: {e}")
             if not sent:
-                await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                await chat.send_message(message, parse_mode=ParseMode.HTML)
                 sent = True
 
         # --- SENZA immagine (es. AliExpress/Temu che bloccano) → anteprima Telegram del link ---
@@ -2873,7 +2874,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await chat.send_message(
                 "\n".join(parts),
                 parse_mode=ParseMode.HTML,
-                reply_markup=kb,
                 link_preview_options=LinkPreviewOptions(url=short_url, prefer_large_media=True, show_above_text=True),
             )
             sent = True
