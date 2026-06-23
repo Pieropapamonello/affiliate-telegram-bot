@@ -237,7 +237,35 @@ SHORT_DOMAINS = ["amzn.eu", "amzn.com", "amzn.to", "amzlink.to", "a.co"]
 # ----------------------------------------------------------------------------
 # Contenuti pubblicati (in memoria + Firestore) — esposti via HTTP per la landing page
 RECENT_DEALS = deque(maxlen=12)   # ultime offerte
-ARTICLES = deque(maxlen=20)       # articoli/recensioni della "redazione"
+ARTICLES = deque(maxlen=20)       # articoli/recensioni della "redazione" (1/giorno)
+# Portale "Gli Affari di Nello": batch di contenuti tech generati da Groq, serviti via /portal.json
+PORTAL = {"articles": [], "ticker": [], "editorial": "", "tags": [], "updated": 0}
+
+
+def _find_article(aid):
+    for a in list(ARTICLES) + PORTAL.get("articles", []):
+        if a.get("id") == aid:
+            return a
+    return None
+
+
+def _groq_sync(system, user, max_tokens=500, model=None):
+    """Chiamata Groq sincrona (per l'HTTP server della chat /ask)."""
+    if not GROQ_API_KEY:
+        return None
+    try:
+        r = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json={"model": model or GROQ_MODEL, "max_tokens": max_tokens, "temperature": 0.8,
+                  "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
+            timeout=30.0,
+        )
+        data = r.json()
+        return (data["choices"][0]["message"]["content"] or "").strip()
+    except Exception as e:
+        logger.warning(f"groq sync: {e}")
+        return None
 
 
 def record_recent_deal(title, price_line=None, store=None, url=None, image=None):
@@ -281,6 +309,16 @@ def load_persisted_content():
                 logger.info(f"Caricati {len(target)} elementi '{doc_id}' da Firestore")
         except Exception as e:
             logger.warning(f"load {doc_id} fs: {e}")
+    try:
+        doc = firestore_db.collection("bot").document("portal").get()
+        if doc.exists:
+            d = doc.to_dict() or {}
+            for k in ("articles", "tags", "ticker", "editorial", "updated"):
+                if k in d:
+                    PORTAL[k] = d[k]
+            logger.info(f"Portale caricato da Firestore: {len(PORTAL.get('articles', []))} articoli")
+    except Exception as e:
+        logger.warning(f"load portal fs: {e}")
 
 
 def _json_response(handler, obj):
@@ -304,21 +342,34 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         if path.startswith("/articles"):
             arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in ARTICLES]
             return _json_response(self, {"articles": arts})
+        # Portale "Gli Affari di Nello": batch completo (articoli + ticker + editoriale + tag)
+        if path.startswith("/portal"):
+            arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in PORTAL.get("articles", [])]
+            return _json_response(self, {**{k: PORTAL[k] for k in ("ticker", "editorial", "tags", "updated")}, "articles": arts})
+        # Chat: /ask?q=...  -> risposta Groq (chiave lato server, non esposta al browser)
+        if path.startswith("/ask"):
+            from urllib.parse import parse_qs, urlparse
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0][:500]
+            titles = [a.get("title") for a in PORTAL.get("articles", [])][:15]
+            sys = ("Sei l'assistente AI di 'Gli Affari di Nello', portale tech italiano. "
+                   "Rispondi SEMPRE in italiano, tono amichevole ed esperto, max 150 parole. "
+                   f"Notizie del giorno: {titles}")
+            ans = _groq_sync(sys, q or "Salve") if q else "Ciao! Chiedimi qualcosa sulla tecnologia di oggi."
+            return _json_response(self, {"answer": ans or "Al momento non riesco a rispondere, riprova."})
         # Copertina articolo: /img/article/<id>.png (rigenerata al volo se non in cache)
         if path.startswith("/img/article/"):
             aid = path.rsplit("/", 1)[-1].replace(".png", "")
             raw = b""
-            for a in ARTICLES:
-                if a.get("id") == aid:
-                    try:
-                        import base64
-                        if not a.get("cover_b64"):
-                            cover = _compose_article_cover(a.get("title") or "", a.get("category"))
-                            a["cover_b64"] = base64.b64encode(cover).decode("ascii")
-                        raw = base64.b64decode(a["cover_b64"])
-                    except Exception as e:
-                        logger.warning(f"cover regen: {e}")
-                    break
+            a = _find_article(aid)
+            if a:
+                try:
+                    import base64
+                    if not a.get("cover_b64"):
+                        cover = _compose_article_cover(a.get("title") or "", a.get("category"))
+                        a["cover_b64"] = base64.b64encode(cover).decode("ascii")
+                    raw = base64.b64decode(a["cover_b64"])
+                except Exception as e:
+                    logger.warning(f"cover regen: {e}")
             if not raw:
                 self.send_response(404)
                 self.end_headers()
@@ -1497,6 +1548,87 @@ async def generate_daily_article(context=None):
                 await context.bot.send_message(chat_id=channel, text=caption, parse_mode=ParseMode.HTML)
         except Exception as e:
             logger.warning(f"post articolo canale: {e}")
+
+
+def _extract_json_array(text):
+    if not text:
+        return None
+    try:
+        v = json.loads(text)
+        if isinstance(v, list):
+            return v
+        if isinstance(v, dict):
+            return v.get("articles") or v.get("items")
+    except Exception:
+        pass
+    m = re.search(r"\[[\s\S]*\]", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return None
+
+
+async def generate_portal(context=None):
+    """Genera il batch di contenuti del portale 'Gli Affari di Nello' con Groq (max ogni 6h)."""
+    if not (GROQ_API_KEY or GEMINI_API_KEY or ai_client):
+        return
+    if PORTAL.get("articles") and PORTAL.get("updated") and time.time() - PORTAL["updated"] < 6 * 3600:
+        return
+    sys = ("Sei il caporedattore di 'Gli Affari di Nello', portale tech italiano. "
+           "Generi notizie e guide tech ORIGINALI, plausibili e attuali, in italiano corretto. "
+           "Non spacciare per reali modelli o prezzi inventati: resta concreto ma generale.")
+    prompt = (
+        "Genera 10 articoli tech per la home del portale. Rispondi SOLO con un array JSON valido, niente altro testo.\n"
+        'Ogni elemento: {"title":"max 75 caratteri","excerpt":"max 160 caratteri",'
+        '"category":"una tra Smartphone,Laptop,Tablet,SmartHome,Gaming,AI,App,Video",'
+        '"priority":"featured|breaking|normal","score":<1-10>,"tags":["t1","t2","t3"],'
+        '"readingTime":<minuti>,"body":"2-3 paragrafi separati da \\n\\n, 120-180 parole totali"}\n'
+        "Esattamente 1 elemento con priority=featured (lo score più alto). Varia le categorie."
+    )
+    raw = await _ai_complete(sys, prompt, 8000)
+    arts = _extract_json_array(raw)
+    if not arts:
+        logger.warning("Portale: generazione non riuscita")
+        return
+    today = time.strftime("%Y%m%d")
+    cleaned = []
+    for i, a in enumerate(arts[:12]):
+        if not isinstance(a, dict) or not a.get("title"):
+            continue
+        a["id"] = f"p{today}{i:02d}"
+        a.setdefault("category", "Altro")
+        a.setdefault("score", 5)
+        a.setdefault("tags", [])
+        a.setdefault("readingTime", 4)
+        a.setdefault("priority", "normal")
+        a.setdefault("excerpt", "")
+        a.setdefault("body", "")
+        a.pop("cover_b64", None)
+        cleaned.append(a)
+    if not cleaned:
+        return
+    if not any(a.get("priority") == "featured" for a in cleaned):
+        max(cleaned, key=lambda x: x.get("score", 0))["priority"] = "featured"
+    tags = []
+    for a in cleaned:
+        for t in (a.get("tags") or []):
+            if t and t not in tags:
+                tags.append(t)
+    ticker = [a["title"] for a in sorted(cleaned, key=lambda x: x.get("score", 0), reverse=True)][:6]
+    editorial = await _ai_complete(
+        "Sei un editorialista tech italiano.",
+        f"In 2-3 frasi scrivi l'editoriale di oggi sul tema tech dominante, a partire da questi titoli: {[a['title'] for a in cleaned[:8]]}",
+        220,
+    ) or ""
+    PORTAL["articles"] = cleaned
+    PORTAL["tags"] = tags[:14]
+    PORTAL["ticker"] = ticker
+    PORTAL["editorial"] = editorial.strip()
+    PORTAL["updated"] = int(time.time())
+    _persist_fs("portal", {k: PORTAL[k] for k in ("articles", "tags", "ticker", "editorial", "updated")})
+    logger.info(f"Portale 'Gli Affari di Nello' generato: {len(cleaned)} articoli")
 
 
 # ----------------------------------------------------------------------------
@@ -3157,6 +3289,9 @@ def main():
         # Articolo/recensione tech generato ogni giorno (stile redazione)
         app.job_queue.run_repeating(generate_daily_article, interval=24 * 3600, first=180)
         logger.info("Redazione: articolo giornaliero schedulato")
+        # Portale 'Gli Affari di Nello': batch contenuti rigenerato ogni 6h
+        app.job_queue.run_repeating(generate_portal, interval=6 * 3600, first=30)
+        logger.info("Portale: generazione contenuti schedulata")
     else:
         logger.warning("JobQueue non disponibile: installa python-telegram-bot[job-queue]")
 
