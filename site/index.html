@@ -39,6 +39,16 @@
   .step h3,.cat h3{margin:.2em 0 .3em;font-size:1.1rem}
   .step p,.cat p{margin:0;color:var(--mut);font-size:.96rem}
   .cat .ic{font-size:1.8rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+  .dcard{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:block;color:inherit;text-decoration:none}
+  .dcard .thumb{aspect-ratio:1/1;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .dcard .thumb img{width:100%;height:100%;object-fit:contain}
+  .dcard .thumb .ph{font-size:2.6rem}
+  .dcard .m{padding:12px 14px}
+  .dcard .m .st{font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
+  .dcard .m h3{font-size:.95rem;margin:.2em 0;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .dcard .m .pr{color:var(--acc);font-weight:700;margin:.2em 0 0}
+  .muted{color:var(--mut)}
   .disc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;color:var(--mut)}
   .disc strong{color:var(--txt)}
   .faq details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 18px;margin-bottom:12px}
@@ -54,6 +64,7 @@
 <nav><div class="wrap">
   <div class="logo">Gli Affari di <b>Nello</b></div>
   <div>
+    <a class="navlink" href="#offerte">Offerte</a>
     <a class="navlink" href="#come-funziona">Come funziona</a>
     <a class="navlink" href="#categorie">Categorie</a>
     <a class="navlink" href="#trasparenza">Trasparenza</a>
@@ -70,6 +81,12 @@
 </div></header>
 
 <main class="wrap">
+
+  <section id="offerte">
+    <h2>Offerte live</h2>
+    <p class="lead">Le ultime offerte pubblicate, aggiornate in tempo reale.</p>
+    <div id="dealsGrid" class="grid"><p class="muted">Caricamento offerte in corso…</p></div>
+  </section>
 
   <section id="come-funziona">
     <h2>Come funziona</h2>
@@ -124,9 +141,32 @@
 
 <script>
   document.getElementById('y').textContent = new Date().getFullYear();
-  // Se imposti il canale, sostituisci l'URL qui sotto (oppure aggiorna direttamente il pulsante).
+
+  // Imposta qui l'URL del canale Telegram quando disponibile.
   var CHANNEL_URL = "";
   if (CHANNEL_URL) { document.getElementById('channelBtn').href = CHANNEL_URL; }
+
+  // Offerte live dal bot (endpoint pubblico, CORS aperto)
+  var DEALS_API = "https://affiliate-telegram-bot-mrwf.onrender.com/deals.json";
+  function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  fetch(DEALS_API, {cache:"no-store"})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var items = (d && d.deals) || [];
+      var sec = document.getElementById('offerte');
+      if (!items.length) { sec.style.display = 'none'; return; }
+      document.getElementById('dealsGrid').innerHTML = items.map(function(x){
+        var media = x.image ? ('<img src="'+esc(x.image)+'" alt="" loading="lazy">') : '<div class="ph">🛍️</div>';
+        var open = x.url ? ('<a class="dcard" href="'+esc(x.url)+'" target="_blank" rel="nofollow sponsored noopener">') : '<div class="dcard">';
+        var close = x.url ? '</a>' : '</div>';
+        return open + '<div class="thumb">'+media+'</div><div class="m">'
+          + (x.store ? '<div class="st">'+esc(x.store)+'</div>' : '')
+          + '<h3>'+esc(x.title)+'</h3>'
+          + (x.price ? '<div class="pr">'+esc(x.price)+'</div>' : '')
+          + '</div>' + close;
+      }).join('');
+    })
+    .catch(function(){ document.getElementById('offerte').style.display = 'none'; });
 </script>
 </body>
 </html>

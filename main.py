@@ -18,6 +18,7 @@ import asyncio
 import logging
 import threading
 import re
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlencode, parse_qs, urlparse, quote_plus
 
@@ -234,8 +235,38 @@ SHORT_DOMAINS = ["amzn.eu", "amzn.com", "amzn.to", "amzlink.to", "a.co"]
 # ----------------------------------------------------------------------------
 # Health check server (Render Web Service ha bisogno di una porta aperta)
 # ----------------------------------------------------------------------------
+# Ultime offerte pubblicate (in memoria) — esposte in /deals.json per la landing page
+RECENT_DEALS = deque(maxlen=12)
+
+
+def record_recent_deal(title, price_line=None, store=None, url=None, image=None):
+    if not title:
+        return
+    try:
+        RECENT_DEALS.appendleft({
+            "title": str(title)[:140],
+            "price": (price_line or "").split("(")[0].strip(),
+            "store": store or "",
+            "url": url or "",
+            "image": image or "",
+        })
+    except Exception:
+        pass
+
+
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # Feed pubblico delle ultime offerte (JSON, CORS aperto) per il sito statico
+        if self.path.rstrip("/").startswith("/deals"):
+            body = json.dumps({"deals": list(RECENT_DEALS)}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "public, max-age=120")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
@@ -2121,6 +2152,9 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
 
     hist = record_observation(entry["url"], current_price)
     price_line = build_price_line(current_price, hist, old_price) or "n/d"
+    record_recent_deal(info.get("title"), price_line,
+                       "Amazon" if kind == "amazon" else info.get("source"),
+                       short_url, info.get("image"))
 
     await rtdb_push(
         "deals",
@@ -2880,6 +2914,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         # Pulizia (status + messaggio originale) SOLO dopo che il post è andato a buon fine
         if sent:
+            record_recent_deal(info.get("title"), price_line, info.get("source"),
+                               short_url, info.get("image"))
             try:
                 await status_msg.delete()
             except Exception:
