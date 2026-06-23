@@ -947,7 +947,17 @@ def extract_amazon_title(soup) -> str:
 
 def extract_amazon_price(soup) -> str:
     try:
-        # Cerca il prezzo PRINCIPALE nei blocchi ufficiali (evita prezzi di accessori/varianti)
+        # 1) Prezzo "da pagare" canonico (esclude il prezzo di listino barrato)
+        for sel in [
+            "span.priceToPay span.a-offscreen",
+            "span.apexPriceToPay span.a-offscreen",
+            "span.reinventPricePriceToPayMargin span.a-offscreen",
+            "#sns-base-price span.a-offscreen",
+        ]:
+            el = soup.select_one(sel)
+            if el and re.search(r"\d", el.get_text()):
+                return el.get_text(strip=True)
+        # 2) Nei blocchi ufficiali: primo a-offscreen che NON sia il prezzo barrato (a-text-price)
         for div_id in [
             "corePriceDisplay_desktop_feature_div",
             "corePrice_feature_div",
@@ -955,10 +965,18 @@ def extract_amazon_price(soup) -> str:
             "buybox",
         ]:
             div = soup.find(id=div_id)
-            if div:
-                off = div.find("span", {"class": "a-offscreen"})
-                if off and off.get_text(strip=True):
-                    return off.get_text(strip=True)
+            if not div:
+                continue
+            for sp in div.find_all("span", {"class": "a-offscreen"}):
+                parent_cls = " ".join((sp.parent.get("class") or []) if sp.parent else [])
+                if "a-text-price" in parent_cls:  # salta prezzo di listino / barrato
+                    continue
+                txt = sp.get_text(strip=True)
+                if txt and re.search(r"\d", txt):
+                    return txt
+            off = div.find("span", {"class": "a-offscreen"})
+            if off and off.get_text(strip=True):
+                return off.get_text(strip=True)
         for pid in ["priceblock_ourprice", "priceblock_dealprice", "priceblock_saleprice"]:
             el = soup.find(id=pid)
             if el and el.get_text(strip=True):
@@ -1542,11 +1560,12 @@ def _cutout_ai(prod):
 
 
 def _cutout(prod):
-    """Scontorna il prodotto: prima prova l'AI (sfondi complessi), poi lo sfondo bianco."""
-    cut, ok = _cutout_ai(prod)
+    """Scontorna il prodotto. Prima lo sfondo bianco/uniforme (foto e-commerce: tiene
+    TUTTO il prodotto, niente errori), poi l'AI per gli sfondi complessi (lifestyle)."""
+    cut, ok = _cutout_white_bg(prod)
     if ok:
         return cut, True
-    return _cutout_white_bg(prod)
+    return _cutout_ai(prod)
 
 
 def _cutout_white_bg(prod):
@@ -2783,12 +2802,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("🔗 Accorciando...")
         short_url = await shorten_url(affiliate_url, use_bitly=(store_kind == "amazon"))
         kb = buy_button(short_url)
-        await status_msg.delete()
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
         chat = update.message.chat
+        sent = False  # cancelliamo il messaggio originale SOLO dopo un invio riuscito
 
         # --- CON immagine prodotto → card brandizzata ---
         if info.get("image"):
@@ -2799,37 +2814,52 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if video_url:
                 try:
                     await chat.send_video(video=video_url, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
-                    return
+                    sent = True
                 except Exception as e:
                     logger.warning(f"send_video error: {e}")
-            photo = await get_post_photo(info, price=price_f, is_min=hist.get("is_new_min"))
-            if photo:
-                try:
-                    await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
-                    return
-                except Exception as e:
-                    logger.warning(f"Photo error: {e}")
-            await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
-            return
+            if not sent:
+                photo = await get_post_photo(info, price=price_f, is_min=hist.get("is_new_min"))
+                if photo:
+                    try:
+                        await chat.send_photo(photo=photo, caption=message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                        sent = True
+                    except Exception as e:
+                        logger.warning(f"Photo error: {e}")
+            if not sent:
+                await chat.send_message(message, parse_mode=ParseMode.HTML, reply_markup=kb)
+                sent = True
 
         # --- SENZA immagine (es. AliExpress/Temu che bloccano) → anteprima Telegram del link ---
-        title = info.get("title") or f"Offerta {info.get('source') or ''}".strip()
-        parts = [f"🛍️ <b>{title}</b>"]
-        if info.get("source"):
-            parts.append(f"🏪 <b>Store:</b> {info['source']}")
-        if price_line:
-            parts.append(f"💰 <b>Prezzo:</b> {price_line}")
-        if review:
-            parts.append(f"\n📝 <i>{review}</i>")
-        if review_link:
-            parts.append(f"🎥 <a href='{review_link}'>Video-recensione</a>")
-        parts.append(f"\n🛒 {short_url}")
-        await chat.send_message(
-            "\n".join(parts),
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb,
-            link_preview_options=LinkPreviewOptions(url=short_url, prefer_large_media=True, show_above_text=True),
-        )
+        else:
+            title = info.get("title") or f"Offerta {info.get('source') or ''}".strip()
+            parts = [f"🛍️ <b>{title}</b>"]
+            if info.get("source"):
+                parts.append(f"🏪 <b>Store:</b> {info['source']}")
+            if price_line:
+                parts.append(f"💰 <b>Prezzo:</b> {price_line}")
+            if review:
+                parts.append(f"\n📝 <i>{review}</i>")
+            if review_link:
+                parts.append(f"🎥 <a href='{review_link}'>Video-recensione</a>")
+            parts.append(f"\n🛒 {short_url}")
+            await chat.send_message(
+                "\n".join(parts),
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+                link_preview_options=LinkPreviewOptions(url=short_url, prefer_large_media=True, show_above_text=True),
+            )
+            sent = True
+
+        # Pulizia (status + messaggio originale) SOLO dopo che il post è andato a buon fine
+        if sent:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
 
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
@@ -2843,7 +2873,9 @@ def main():
     start_health_check_server()
     init_firestore()
     init_rtdb()
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    # concurrent_updates=True: più link inviati di fila vengono elaborati in parallelo
+    # (il lavoro pesante immagini/AI gira già in thread separati)
+    app = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("id", id_cmd))
