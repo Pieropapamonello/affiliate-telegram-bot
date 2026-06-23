@@ -3,124 +3,223 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gli Affari di Nello — Offerte e sconti su Amazon, AliExpress e altri store</title>
-<meta name="description" content="Gli Affari di Nello: le migliori offerte online selezionate ogni giorno. Sconti su elettronica, casa, gaming, moda e molto altro, con prezzi sempre aggiornati.">
+<title>Gli Affari di Nello — Le migliori offerte online, ogni giorno</title>
+<meta name="description" content="Gli Affari di Nello: offerte e sconti selezionati ogni giorno su Amazon, AliExpress e i migliori store. Prezzi verificati, link diretti, zero stress.">
 <meta name="robots" content="index, follow">
 <meta property="og:title" content="Gli Affari di Nello — Offerte e sconti">
 <meta property="og:description" content="Le migliori offerte online selezionate ogni giorno.">
 <meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#0f1115;--card:#171a21;--line:#232838;--mut:#9aa3b2;--acc:#ff7a00;--txt:#f2f4f8}
+  :root{
+    --bg:#0b0d12; --bg2:#0f131b; --card:#141925; --line:#222a3a;
+    --mut:#97a1b4; --txt:#eef1f7; --acc:#ff7a18; --acc2:#ffb347; --good:#27d07f;
+    --shadow:0 20px 50px -20px rgba(0,0,0,.7);
+  }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
-  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--txt);line-height:1.6}
-  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
-  nav{position:sticky;top:0;background:rgba(15,17,21,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);z-index:10}
-  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
-  nav .logo{font-weight:800;letter-spacing:.5px}
-  nav .logo b{color:var(--acc)}
-  nav a.navlink{color:var(--mut);text-decoration:none;margin-left:18px;font-size:.95rem}
-  nav a.navlink:hover{color:var(--txt)}
-  header.hero{text-align:center;padding:84px 20px 50px;background:radial-gradient(900px 400px at 50% -10%,rgba(255,122,0,.22),transparent)}
-  .hero h1{font-size:2.8rem;margin:.1em 0 .2em;letter-spacing:.5px}
-  .hero p.sub{color:var(--mut);font-size:1.2rem;max-width:640px;margin:0 auto 28px}
-  .btn{display:inline-block;padding:14px 24px;margin:7px;border-radius:12px;background:#222631;color:var(--txt);text-decoration:none;font-weight:600;border:1px solid var(--line);transition:.15s}
-  .btn:hover{transform:translateY(-1px)}
-  .btn.primary{background:var(--acc);color:#1a1200;border-color:transparent}
-  section{padding:42px 0;border-top:1px solid var(--line)}
-  section:first-of-type{border-top:0}
-  h2{font-size:1.7rem;margin:0 0 6px}
-  .lead{color:var(--mut);margin:0 0 22px;max-width:720px}
-  .steps,.cats{display:grid;gap:16px}
-  .steps{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
-  .cats{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
-  .step,.cat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
-  .step .n{display:inline-flex;width:34px;height:34px;align-items:center;justify-content:center;border-radius:9px;background:var(--acc);color:#1a1200;font-weight:800;margin-bottom:10px}
-  .step h3,.cat h3{margin:.2em 0 .3em;font-size:1.1rem}
+  body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--txt);line-height:1.65;-webkit-font-smoothing:antialiased}
+  h1,h2,h3,.logo{font-family:Sora,Inter,sans-serif;line-height:1.15}
+  .wrap{max-width:1140px;margin:0 auto;padding:0 22px}
+  a{color:var(--acc)}
+  /* NAV */
+  nav{position:sticky;top:0;z-index:30;background:rgba(11,13,18,.72);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:66px}
+  .logo{font-weight:800;font-size:1.15rem;letter-spacing:.3px}
+  .logo b{color:var(--acc)}
+  .navlinks a{color:var(--mut);text-decoration:none;margin-left:22px;font-size:.93rem;font-weight:500;transition:color .15s}
+  .navlinks a:hover{color:var(--txt)}
+  .navlinks .cta{margin-left:22px}
+  .cta{display:inline-block;padding:11px 18px;border-radius:11px;font-weight:600;text-decoration:none;
+       background:linear-gradient(135deg,var(--acc),var(--acc2));color:#1a1200;box-shadow:0 8px 24px -8px rgba(255,122,24,.6);transition:transform .15s,box-shadow .15s}
+  .cta:hover{transform:translateY(-2px);box-shadow:0 12px 30px -8px rgba(255,122,24,.75)}
+  .ghost{display:inline-block;padding:11px 18px;border-radius:11px;font-weight:600;text-decoration:none;color:var(--txt);border:1px solid var(--line);background:#161b27;transition:.15s}
+  .ghost:hover{border-color:#3a4760;transform:translateY(-2px)}
+  @media(max-width:760px){.navlinks a:not(.cta){display:none}}
+  /* HERO */
+  .hero{position:relative;overflow:hidden;padding:96px 0 80px;
+        background:radial-gradient(1000px 500px at 78% -8%,rgba(255,122,24,.20),transparent 60%),
+                   radial-gradient(800px 500px at 10% 10%,rgba(39,208,127,.10),transparent 55%)}
+  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center}
+  .badge{display:inline-flex;align-items:center;gap:8px;background:#15202e;border:1px solid var(--line);color:var(--mut);
+         padding:7px 14px;border-radius:999px;font-size:.82rem;font-weight:500;margin-bottom:22px}
+  .badge .dot{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 4px rgba(39,208,127,.18)}
+  .hero h1{font-size:3.3rem;margin:0 0 18px;letter-spacing:-.5px}
+  .hero h1 .grad{background:linear-gradient(120deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p{color:var(--mut);font-size:1.18rem;max-width:540px;margin:0 0 30px}
+  .hero .actions{display:flex;flex-wrap:wrap;gap:12px}
+  .hero .actions .cta,.hero .actions .ghost{padding:15px 26px;font-size:1rem}
+  /* HERO MOCKUP */
+  .mock{position:relative;justify-self:center;width:330px;max-width:100%;transform:rotate(2.5deg);
+        background:linear-gradient(180deg,#192233,#121826);border:1px solid var(--line);border-radius:24px;padding:16px;box-shadow:var(--shadow)}
+  .mock:before{content:"";position:absolute;inset:-1px;border-radius:24px;padding:1px;
+        background:linear-gradient(140deg,rgba(255,122,24,.6),transparent 40%);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+  .mock .pic{height:200px;border-radius:16px;background:
+        radial-gradient(120px 120px at 30% 30%,#ff7a18,transparent),
+        radial-gradient(160px 160px at 75% 70%,#27d07f,transparent),#0c111a;display:flex;align-items:flex-end;justify-content:space-between;padding:12px}
+  .mock .store{background:#fff;color:#111;font-weight:700;font-size:.72rem;padding:5px 9px;border-radius:8px}
+  .mock .price{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#1a1200;font-weight:800;padding:6px 12px;border-radius:10px;font-size:1.05rem}
+  .mock h4{font-family:Sora;margin:14px 4px 4px;font-size:1.02rem}
+  .mock .sub{color:var(--mut);font-size:.85rem;margin:0 4px 14px}
+  .mock .buy{display:block;text-align:center;background:#1c2436;border:1px solid var(--line);border-radius:12px;padding:11px;color:var(--acc);font-weight:700;font-size:.9rem}
+  @media(max-width:860px){.hero .wrap{grid-template-columns:1fr;text-align:center}.hero p{margin-left:auto;margin-right:auto}.hero .actions{justify-content:center}.mock{margin-top:10px}.hero h1{font-size:2.5rem}}
+  /* STATS */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin:8px 0 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;text-align:center}
+  .stat .n{font-family:Sora;font-weight:800;font-size:1.9rem;background:linear-gradient(120deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat .l{color:var(--mut);font-size:.9rem;margin-top:4px}
+  @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
+  /* SECTIONS */
+  section{padding:64px 0}
+  .sec-head{text-align:center;max-width:680px;margin:0 auto 38px}
+  .sec-head .kick{color:var(--acc);font-weight:700;letter-spacing:1.5px;text-transform:uppercase;font-size:.78rem}
+  .sec-head h2{font-size:2.1rem;margin:8px 0 10px}
+  .sec-head p{color:var(--mut);margin:0;font-size:1.05rem}
+  /* STORE ROW */
+  .stores{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+  .chip{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 20px;font-weight:700;letter-spacing:.3px;color:var(--txt)}
+  /* GENERIC GRIDS */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:18px}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+  .cats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px}
+  .step,.cat{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px;transition:transform .18s,border-color .18s}
+  .step:hover,.cat:hover{transform:translateY(-4px);border-color:#34405a}
+  .step .ic,.cat .ic{font-size:1.9rem}
+  .step .n{display:inline-flex;width:38px;height:38px;align-items:center;justify-content:center;border-radius:11px;
+           background:linear-gradient(135deg,var(--acc),var(--acc2));color:#1a1200;font-weight:800;margin-bottom:14px;font-family:Sora}
+  .step h3,.cat h3{margin:.3em 0 .35em;font-size:1.12rem}
   .step p,.cat p{margin:0;color:var(--mut);font-size:.96rem}
-  .cat .ic{font-size:1.8rem}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
-  .dcard{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:block;color:inherit;text-decoration:none}
+  /* DEAL CARDS */
+  .dcard{background:var(--card);border:1px solid var(--line);border-radius:18px;overflow:hidden;display:block;color:inherit;text-decoration:none;transition:transform .18s,border-color .18s,box-shadow .18s}
+  .dcard:hover{transform:translateY(-5px);border-color:#3a4760;box-shadow:var(--shadow)}
   .dcard .thumb{aspect-ratio:1/1;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden}
   .dcard .thumb img{width:100%;height:100%;object-fit:contain}
-  .dcard .thumb .ph{font-size:2.6rem}
-  .dcard .m{padding:12px 14px}
-  .dcard .m .st{font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
-  .dcard .m h3{font-size:.95rem;margin:.2em 0;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .dcard .m .pr{color:var(--acc);font-weight:700;margin:.2em 0 0}
-  .muted{color:var(--mut)}
-  .disc{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;color:var(--mut)}
+  .dcard .thumb .ph{font-size:2.8rem}
+  .dcard .m{padding:14px 16px}
+  .dcard .m .st{font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  .dcard .m h3{font-size:.97rem;margin:.25em 0;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.6em}
+  .dcard .m .pr{color:var(--acc);font-weight:800;font-size:1.12rem;font-family:Sora}
+  .muted{color:var(--mut);text-align:center}
+  /* DISCLOSURE / FAQ */
+  .disc{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px;color:var(--mut);max-width:860px;margin:0 auto}
   .disc strong{color:var(--txt)}
-  .faq details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 18px;margin-bottom:12px}
-  .faq summary{cursor:pointer;font-weight:600;padding:14px 0}
-  .faq p{color:var(--mut);margin:0 0 14px}
-  footer{text-align:center;color:var(--mut);padding:34px 20px;font-size:.9rem;border-top:1px solid var(--line)}
+  .faq{max-width:760px;margin:0 auto}
+  .faq details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:2px 20px;margin-bottom:12px}
+  .faq summary{cursor:pointer;font-weight:600;padding:16px 0;list-style:none}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary:after{content:"+";float:right;color:var(--acc);font-weight:800}
+  .faq details[open] summary:after{content:"−"}
+  .faq p{color:var(--mut);margin:0 0 16px}
+  /* CTA BAND */
+  .band{background:linear-gradient(135deg,rgba(255,122,24,.16),rgba(39,208,127,.10));border:1px solid var(--line);border-radius:24px;padding:46px;text-align:center}
+  .band h2{font-size:1.9rem;margin:0 0 10px}
+  .band p{color:var(--mut);margin:0 0 24px}
+  /* FOOTER */
+  footer{border-top:1px solid var(--line);padding:40px 20px;color:var(--mut);font-size:.9rem;text-align:center}
   footer a{color:var(--acc)}
-  a{color:var(--acc)}
+  /* REVEAL */
+  .reveal{opacity:0;transform:translateY(22px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
 </style>
 </head>
 <body>
 
 <nav><div class="wrap">
   <div class="logo">Gli Affari di <b>Nello</b></div>
-  <div>
-    <a class="navlink" href="#offerte">Offerte</a>
-    <a class="navlink" href="#come-funziona">Come funziona</a>
-    <a class="navlink" href="#categorie">Categorie</a>
-    <a class="navlink" href="#trasparenza">Trasparenza</a>
+  <div class="navlinks">
+    <a href="#offerte">Offerte</a>
+    <a href="#come">Come funziona</a>
+    <a href="#categorie">Categorie</a>
+    <a class="cta" id="navCta" href="https://t.me/nellinobuybot" target="_blank" rel="noopener">Entra nel canale</a>
   </div>
 </div></nav>
 
 <header class="hero"><div class="wrap">
-  <h1>Gli Affari di Nello</h1>
-  <p class="sub">Le migliori offerte online, selezionate e verificate ogni giorno. Sconti reali su Amazon, AliExpress e i principali store, con prezzo sempre aggiornato.</p>
-  <div>
-    <a class="btn primary" href="https://t.me/nellinobuybot" target="_blank" rel="noopener">🤖 Apri il bot Telegram</a>
-    <a class="btn" id="channelBtn" href="https://t.me/nellinobuybot" target="_blank" rel="noopener">📢 Vai al canale offerte</a>
+  <div class="reveal in">
+    <span class="badge"><span class="dot"></span> Nuove offerte ogni giorno</span>
+    <h1>Le migliori <span class="grad">offerte online</span>, selezionate per te.</h1>
+    <p>Sconti reali e verificati su Amazon, AliExpress e i principali store. Niente ricerche infinite: ti portiamo dritto al prezzo giusto.</p>
+    <div class="actions">
+      <a class="cta" id="heroChannel" href="https://t.me/nellinobuybot" target="_blank" rel="noopener">📢 Vai al canale offerte</a>
+      <a class="ghost" href="https://t.me/nellinobuybot" target="_blank" rel="noopener">🤖 Apri il bot</a>
+    </div>
+  </div>
+  <div class="mock reveal in" aria-hidden="true">
+    <div class="pic"><span class="store">Amazon</span><span class="price">-42%</span></div>
+    <h4>Il tuo prossimo affare ti aspetta</h4>
+    <p class="sub">Prezzo verificato · spedizione ufficiale</p>
+    <span class="buy">🛒 Vedi offerta</span>
   </div>
 </div></header>
 
-<main class="wrap">
+<div class="wrap" style="margin-top:-30px">
+  <div class="stats reveal">
+    <div class="stat"><div class="n">Ogni giorno</div><div class="l">Nuove offerte pubblicate</div></div>
+    <div class="stat"><div class="n">100+</div><div class="l">Store supportati</div></div>
+    <div class="stat"><div class="n">0€</div><div class="l">Costo per te</div></div>
+    <div class="stat"><div class="n">Live</div><div class="l">Prezzi sempre aggiornati</div></div>
+  </div>
+</div>
 
-  <section id="offerte">
-    <h2>Offerte live</h2>
-    <p class="lead">Le ultime offerte pubblicate, aggiornate in tempo reale.</p>
-    <div id="dealsGrid" class="grid"><p class="muted">Caricamento offerte in corso…</p></div>
-  </section>
+<main>
 
-  <section id="come-funziona">
-    <h2>Come funziona</h2>
-    <p class="lead">Niente caccia al prezzo per ore: ci pensiamo noi. Tu devi solo scegliere e acquistare.</p>
+  <section id="offerte"><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">In tempo reale</span><h2>Offerte live</h2><p>Le ultime occasioni appena pubblicate sul canale.</p></div>
+    <div id="dealsGrid" class="grid reveal"><p class="muted">Caricamento offerte in corso…</p></div>
+  </div></section>
+
+  <section style="padding-top:0"><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">Compatibilità</span><h2>Funziona con i tuoi negozi preferiti</h2></div>
+    <div class="stores reveal">
+      <span class="chip">Amazon</span><span class="chip">AliExpress</span><span class="chip">eBay</span>
+      <span class="chip">Zalando</span><span class="chip">MediaWorld</span><span class="chip">Unieuro</span>
+      <span class="chip">Temu</span><span class="chip">Zooplus</span><span class="chip">e molti altri…</span>
+    </div>
+  </div></section>
+
+  <section id="come"><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">Semplice</span><h2>Come funziona</h2><p>Tre passi e il risparmio è fatto.</p></div>
     <div class="steps">
-      <div class="step"><span class="n">1</span><h3>Selezioniamo</h3><p>Ogni giorno cerchiamo i prodotti più convenienti e controlliamo che lo sconto sia reale rispetto allo storico del prezzo.</p></div>
-      <div class="step"><span class="n">2</span><h3>Pubblichiamo</h3><p>Le offerte, complete di foto, prezzo e store di provenienza, arrivano in tempo reale sul nostro canale Telegram.</p></div>
-      <div class="step"><span class="n">3</span><h3>Risparmi</h3><p>Apri il link, completi l'acquisto sullo store ufficiale e approfitti dello sconto. Semplice e sicuro.</p></div>
+      <div class="step reveal"><span class="n">1</span><h3>Selezioniamo</h3><p>Ogni giorno cerchiamo i prodotti più convenienti e verifichiamo che lo sconto sia reale rispetto allo storico del prezzo.</p></div>
+      <div class="step reveal"><span class="n">2</span><h3>Pubblichiamo</h3><p>Le offerte, con foto, prezzo e store di provenienza, arrivano in tempo reale sul canale Telegram.</p></div>
+      <div class="step reveal"><span class="n">3</span><h3>Risparmi</h3><p>Apri il link, completi l'acquisto sullo store ufficiale e approfitti dello sconto. Semplice e sicuro.</p></div>
     </div>
-  </section>
+  </div></section>
 
-  <section id="categorie">
-    <h2>Le categorie che seguiamo</h2>
-    <p class="lead">Copriamo i settori dove gli sconti fanno davvero la differenza.</p>
+  <section id="categorie"><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">Per tutti i gusti</span><h2>Le categorie che seguiamo</h2></div>
     <div class="cats">
-      <div class="cat"><div class="ic">💻</div><h3>Elettronica</h3><p>TV, smartphone, PC, audio e accessori tech.</p></div>
-      <div class="cat"><div class="ic">🏠</div><h3>Casa &amp; Cucina</h3><p>Piccoli elettrodomestici, robot e utili per la casa.</p></div>
-      <div class="cat"><div class="ic">🎮</div><h3>Gaming</h3><p>Console, periferiche, sedie e giochi in offerta.</p></div>
-      <div class="cat"><div class="ic">👟</div><h3>Moda &amp; Sport</h3><p>Scarpe, abbigliamento e attrezzatura sportiva.</p></div>
-      <div class="cat"><div class="ic">💄</div><h3>Bellezza</h3><p>Cura della persona e prodotti beauty scontati.</p></div>
-      <div class="cat"><div class="ic">🧸</div><h3>Famiglia</h3><p>Prodotti per bambini, giocattoli e tempo libero.</p></div>
+      <div class="cat reveal"><div class="ic">💻</div><h3>Elettronica</h3><p>TV, smartphone, PC, audio e accessori tech.</p></div>
+      <div class="cat reveal"><div class="ic">🏠</div><h3>Casa &amp; Cucina</h3><p>Elettrodomestici, robot e utili per la casa.</p></div>
+      <div class="cat reveal"><div class="ic">🎮</div><h3>Gaming</h3><p>Console, periferiche, sedie e giochi in offerta.</p></div>
+      <div class="cat reveal"><div class="ic">👟</div><h3>Moda &amp; Sport</h3><p>Scarpe, abbigliamento e attrezzatura sportiva.</p></div>
+      <div class="cat reveal"><div class="ic">💄</div><h3>Bellezza</h3><p>Cura della persona e prodotti beauty scontati.</p></div>
+      <div class="cat reveal"><div class="ic">🧸</div><h3>Famiglia</h3><p>Prodotti per bambini, giocattoli e tempo libero.</p></div>
     </div>
-  </section>
+  </div></section>
 
-  <section class="faq">
-    <h2>Domande frequenti</h2>
-    <details><summary>Il servizio è gratuito?</summary><p>Sì, seguire il canale e usare il bot è completamente gratuito. Gli sconti sono quelli applicati dagli store.</p></details>
-    <details><summary>Dove avviene l'acquisto?</summary><p>Sempre sul sito ufficiale dello store (Amazon, AliExpress, ecc.). Noi ti portiamo direttamente alla pagina del prodotto in offerta.</p></details>
-    <details><summary>I prezzi sono garantiti?</summary><p>I prezzi cambiano spesso: indichiamo quello visto al momento della pubblicazione. Verifica sempre il prezzo finale sullo store prima di acquistare.</p></details>
-  </section>
+  <section><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">Dubbi?</span><h2>Domande frequenti</h2></div>
+    <div class="faq reveal">
+      <details><summary>Il servizio è gratuito?</summary><p>Sì, seguire il canale e usare il bot è completamente gratuito. Gli sconti sono quelli applicati dagli store.</p></details>
+      <details><summary>Dove avviene l'acquisto?</summary><p>Sempre sul sito ufficiale dello store (Amazon, AliExpress, ecc.). Noi ti portiamo direttamente alla pagina del prodotto in offerta.</p></details>
+      <details><summary>I prezzi sono garantiti?</summary><p>I prezzi cambiano spesso: indichiamo quello visto al momento della pubblicazione. Verifica sempre il prezzo finale sullo store prima di acquistare.</p></details>
+    </div>
+  </div></section>
 
-  <section id="trasparenza">
-    <h2>Trasparenza e affiliazione</h2>
-    <div class="disc">
+  <section><div class="wrap">
+    <div class="band reveal">
+      <h2>Non perdere il prossimo affare</h2>
+      <p>Unisciti gratis al canale: le offerte migliori, prima di tutti.</p>
+      <a class="cta" id="bandChannel" href="https://t.me/nellinobuybot" target="_blank" rel="noopener" style="padding:15px 30px;font-size:1.05rem">📢 Entra nel canale</a>
+    </div>
+  </div></section>
+
+  <section id="trasparenza" style="padding-top:0"><div class="wrap">
+    <div class="sec-head reveal"><span class="kick">Chiarezza</span><h2>Trasparenza e affiliazione</h2></div>
+    <div class="disc reveal">
       <p><strong>Gli Affari di Nello</strong> partecipa a programmi di affiliazione, incluso il <strong>Programma di Affiliazione Amazon EU</strong>.
       Alcuni link presenti su questo sito e sul canale Telegram sono <em>link affiliati</em>: se acquisti tramite questi link
       potremmo ricevere una piccola commissione, <strong>senza alcun costo aggiuntivo per te</strong>.</p>
@@ -129,7 +228,7 @@
       Gli store di destinazione e le reti di affiliazione possono utilizzare cookie tecnici per attribuire correttamente gli acquisti.
       I marchi e i loghi citati appartengono ai rispettivi proprietari e sono usati a solo scopo descrittivo.</p>
     </div>
-  </section>
+  </div></section>
 
 </main>
 
@@ -142,9 +241,15 @@
 <script>
   document.getElementById('y').textContent = new Date().getFullYear();
 
-  // Imposta qui l'URL del canale Telegram quando disponibile.
+  // Imposta qui l'URL del canale Telegram quando disponibile (aggiorna tutti i pulsanti).
   var CHANNEL_URL = "";
-  if (CHANNEL_URL) { document.getElementById('channelBtn').href = CHANNEL_URL; }
+  if (CHANNEL_URL) {
+    ["navCta","heroChannel","bandChannel"].forEach(function(id){ var e=document.getElementById(id); if(e) e.href=CHANNEL_URL; });
+  }
+
+  // Reveal on scroll
+  var io = new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(function(el){io.observe(el);});
 
   // Offerte live dal bot (endpoint pubblico, CORS aperto)
   var DEALS_API = "https://affiliate-telegram-bot-mrwf.onrender.com/deals.json";
