@@ -256,78 +256,98 @@ def _json_response(handler, obj):
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Server HTTP pubblico (feed JSON + immagini) con tabella di rotte."""
+
     def do_GET(self):
         path = self.path.split("?")[0].rstrip("/")
-        # Feed offerte
-        if path.startswith("/deals"):
-            return _json_response(self, {"deals": list(RECENT_DEALS)})
-        # Feed articoli/recensioni (senza il base64 della copertina)
-        if path.startswith("/articles"):
-            arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in ARTICLES]
-            return _json_response(self, {"articles": arts})
-        # Portale "Gli Affari di Nello": batch completo (articoli + ticker + editoriale + tag)
-        if path.startswith("/portal"):
-            arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in PORTAL.get("articles", [])]
-            return _json_response(self, {**{k: PORTAL[k] for k in ("ticker", "editorial", "tags", "specs", "videos", "updated")}, "articles": arts})
-        # Chat: /ask?q=...  -> risposta Groq (chiave lato server, non esposta al browser)
-        if path.startswith("/ask"):
-            from urllib.parse import parse_qs, urlparse
-            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0][:500]
-            titles = [a.get("title") for a in PORTAL.get("articles", [])][:15]
-            sys = ("Sei l'assistente AI di 'Gli Affari di Nello', portale tech italiano. "
-                   "Rispondi SEMPRE in italiano, tono amichevole ed esperto, max 150 parole. "
-                   f"Notizie del giorno: {titles}")
-            ans = _groq_sync(sys, q or "Salve") if q else "Ciao! Chiedimi qualcosa sulla tecnologia di oggi."
-            return _json_response(self, {"answer": ans or "Al momento non riesco a rispondere, riprova."})
-        # Articolo completo (lungo) generato on-demand e messo in cache
-        if path.startswith("/article"):
-            from urllib.parse import parse_qs, urlparse
-            aid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
-            a = _find_article(aid)
-            if not a:
-                return _json_response(self, {"title": "", "body": ""})
-            if not a.get("full_body"):
-                sysp = ("Sei un giornalista tech italiano della testata 'Gli Affari di Nello'. "
-                        "Scrivi articoli completi, informativi e scorrevoli, in italiano corretto.")
-                pr = (f"Scrivi un articolo completo di 450-600 parole sul tema: \"{a.get('title')}\" "
-                      f"(categoria: {a.get('category')}). Introduzione, 3-4 paragrafi di sviluppo con dettagli "
-                      "concreti e consigli, e una conclusione. Niente titolo, niente markdown: "
-                      "solo paragrafi separati da una riga vuota.")
-                a["full_body"] = _groq_sync(sysp, pr, 1600) or a.get("body", "")
-            return _json_response(self, {"title": a.get("title"), "category": a.get("category"), "body": a.get("full_body")})
-        # Copertina articolo: /img/article/<id>.png (rigenerata al volo se non in cache)
-        if path.startswith("/img/article/"):
-            plain = "plain=1" in self.path
-            aid = path.rsplit("/", 1)[-1].replace(".png", "")
-            raw = b""
-            a = _find_article(aid)
-            if a:
-                try:
-                    import base64
-                    key = "cover_plain_b64" if plain else "cover_b64"
-                    if not a.get(key):
-                        cover = (_compose_plain_cover(a.get("category")) if plain
-                                 else _compose_article_cover(a.get("title") or "", a.get("category")))
-                        a[key] = base64.b64encode(cover).decode("ascii")
-                    raw = base64.b64decode(a[key])
-                except Exception as e:
-                    logger.warning(f"cover regen: {e}")
-            if not raw:
-                self.send_response(404)
-                self.end_headers()
-                return
-            self.send_response(200)
-            self.send_header("Content-type", "image/png")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.send_header("Content-Length", str(len(raw)))
+        for prefix, handler in HealthCheckHandler.ROUTES:
+            if path.startswith(prefix):
+                return handler(self, path)
+        self._text("Bot is running")
+
+    # --- helpers ---
+    def _text(self, s):
+        body = s.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _png(self, raw):
+        if not raw:
+            self.send_response(404)
             self.end_headers()
-            self.wfile.write(raw)
             return
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
+        self.send_header("Content-type", "image/png")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(b"Bot is running")
+        self.wfile.write(raw)
+
+    def _query(self, key):
+        return (parse_qs(urlparse(self.path).query).get(key) or [""])[0]
+
+    # --- rotte ---
+    def r_health(self, path):
+        self._text("ok")
+
+    def r_deals(self, path):
+        _json_response(self, {"deals": list(RECENT_DEALS)})
+
+    def r_portal(self, path):
+        arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in PORTAL.get("articles", [])]
+        keys = ("ticker", "editorial", "tags", "specs", "videos", "updated")
+        _json_response(self, {**{k: PORTAL[k] for k in keys}, "articles": arts})
+
+    def r_ask(self, path):
+        q = self._query("q")[:500]
+        titles = [a.get("title") for a in PORTAL.get("articles", [])][:15]
+        sysp = ("Sei l'assistente di 'Gli Affari di Nello', portale tech italiano. "
+                "Rispondi SEMPRE in italiano, tono amichevole ed esperto, max 150 parole. "
+                f"Notizie del giorno: {titles}")
+        ans = _groq_sync(sysp, q) if q else "Ciao! Chiedimi qualcosa sulla tecnologia di oggi."
+        _json_response(self, {"answer": ans or "Al momento non riesco a rispondere, riprova."})
+
+    def r_article(self, path):
+        a = _find_article(self._query("id"))
+        if not a:
+            return _json_response(self, {"title": "", "body": ""})
+        if not a.get("full_body"):
+            sysp = ("Sei un giornalista tech italiano della testata 'Gli Affari di Nello'. "
+                    "Scrivi articoli completi, informativi e scorrevoli, in italiano corretto.")
+            pr = (f"Scrivi un articolo completo di 450-600 parole sul tema: \"{a.get('title')}\" "
+                  f"(categoria: {a.get('category')}). Introduzione, 3-4 paragrafi di sviluppo con dettagli "
+                  "concreti e consigli, e una conclusione. Niente titolo, niente markdown: "
+                  "solo paragrafi separati da una riga vuota.")
+            a["full_body"] = _groq_sync(sysp, pr, 1600) or a.get("body", "")
+        _json_response(self, {"title": a.get("title"), "category": a.get("category"), "body": a.get("full_body")})
+
+    def r_cover(self, path):
+        plain = "plain=1" in self.path
+        aid = path.rsplit("/", 1)[-1].replace(".png", "")
+        raw = b""
+        a = _find_article(aid)
+        if a:
+            try:
+                import base64
+                key = "cover_plain_b64" if plain else "cover_b64"
+                if not a.get(key):
+                    cover = (_compose_plain_cover(a.get("category")) if plain
+                             else _compose_article_cover(a.get("title") or "", a.get("category")))
+                    a[key] = base64.b64encode(cover).decode("ascii")
+                raw = base64.b64decode(a[key])
+            except Exception as e:
+                logger.warning(f"cover regen: {e}")
+        self._png(raw)
+
+    ROUTES = [
+        ("/healthz", r_health), ("/ping", r_health),
+        ("/deals", r_deals), ("/portal", r_portal),
+        ("/ask", r_ask), ("/img/article/", r_cover), ("/article", r_article),
+    ]
 
     def log_message(self, format, *args):
         pass
@@ -1636,14 +1656,6 @@ def _rounded(size, radius, fill):
     img = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(img).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=fill)
     return img
-
-
-def _chip(draw, bg, xy, text, font, color, text_color=(255, 255, 255), pad=20, h=60, radius=18):
-    tw = draw.textlength(text, font=font)
-    chip = _rounded((int(tw + 2 * pad), h), radius, color + (255,))
-    bg.paste(chip, (int(xy[0]), int(xy[1])), chip)
-    draw.text((xy[0] + pad, xy[1] + (h - font.size) / 2 - 2), text, font=font, fill=text_color)
-    return int(tw + 2 * pad)
 
 
 def _wrap(draw, text, font, max_w, max_lines=2):
