@@ -385,7 +385,7 @@ const isTouch = matchMedia('(hover:none)').matches;
 /* Backend: il bot Telegram (ha la chiave Groq lato server) espone i contenuti */
 const BOT = "https://affiliate-telegram-bot-mrwf.onrender.com";
 
-const AI = { demo:false, articles:[], ticker:[], editorial:"", tags:[] };
+const AI = { demo:false, articles:[], ticker:[], editorial:"", tags:[], specs:[], videos:[] };
 const $ = (s,r=document)=>r.querySelector(s);
 const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -481,20 +481,31 @@ function renderSidebar(arts){
   $$('#topic-tags button').forEach(b=>b.onclick=()=>{ const t=b.dataset.tag.toLowerCase(); const f=arts.filter(a=>(a.tags||[]).some(x=>String(x).toLowerCase()===t)); renderFeedRaw(f.length?f:arts); location.hash='#feed'; });
 }
 function renderTicker(items){ const h=(items&&items.length?items:['Benvenuto su Gli Affari di Nello']).map(t=>`<span>● ${esc(t)}</span>`).join(''); $('#ticker-track').innerHTML=h+h; }
+let SPECS=DEMO_SPECS;
 function renderSpecs(){
-  $('#specs-carousel').innerHTML=DEMO_SPECS.map((s,i)=>`
-    <div class="spec-card"><div class="card-inner">
-      <div class="card-front"><img src="${placeImg('spec'+i,400,400)}" alt="${esc(s.name)}">
+  SPECS=(AI.specs&&AI.specs.length)?AI.specs:DEMO_SPECS;
+  $('#specs-carousel').innerHTML=SPECS.map((s,i)=>{
+    const rating=Math.max(0,Math.min(5,Math.round(s.rating||4)));
+    const img=`https://image.pollinations.ai/prompt/${encodeURIComponent((s.name||'tech product')+' product photo, white background, studio')}?width=500&height=500&nologo=true&seed=${i}`;
+    const open=s.url?`<a class="compare-link" href="${esc(s.url)}" target="_blank" rel="nofollow sponsored noopener" style="color:var(--color-accent);font-weight:700;font-size:.8rem;padding:8px;display:block;text-align:center">Vedi su Amazon →</a>`:'';
+    return `<div class="spec-card"><div class="card-inner">
+      <div class="card-front"><img src="${img}" alt="${esc(s.name)}" loading="lazy" onerror="this.onerror=null;this.src='${esc(placeImg('spec'+i,400,400))}'">
         <div class="spec-body"><h4 style="font-family:var(--font-display)">${esc(s.name)}</h4>
-          <div class="price">${esc(s.price)}</div><div class="stars">${'★'.repeat(s.rating)}${'☆'.repeat(5-s.rating)}</div>
-          <div class="spec-list">${s.specs.map(x=>'• '+esc(x)).join('<br>')}</div></div>
+          <div class="price">${esc(s.price||'')}</div><div class="stars">${'★'.repeat(rating)}${'☆'.repeat(5-rating)}</div>
+          <div class="spec-list">${(s.specs||[]).map(x=>'• '+esc(x)).join('<br>')}</div></div>
         <button class="compare-btn" data-i="${i}">＋ Confronta</button></div>
-      <div class="card-back"><h4>${esc(s.name)}</h4><div class="pros">✔ ${esc(s.pros)}</div><div class="cons">✘ ${esc(s.cons)}</div><p style="color:var(--color-text-faint);font-size:.78rem;margin-top:10px">Ruota per il fronte</p></div>
-    </div></div>`).join('');
+      <div class="card-back"><h4>${esc(s.name)}</h4><div class="pros">✔ ${esc(s.pros||'')}</div><div class="cons">✘ ${esc(s.cons||'')}</div>${open}<p style="color:var(--color-text-faint);font-size:.78rem;margin-top:8px">Ruota per il fronte</p></div>
+    </div></div>`;
+  }).join('');
   $$('#specs-carousel .compare-btn').forEach(b=>b.onclick=e=>{e.stopPropagation();toggleCompare(+b.dataset.i,b);});
 }
 function renderVideos(){
-  $('#video-grid').innerHTML=DEMO_VIDEOS.map((v,i)=>`<div class="video-card"><img src="${placeImg('vid'+i,640,360)}" alt="${esc(v[0])}"><div class="play-btn"><svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div><div class="ov"><h4>${esc(v[0])}</h4></div></div>`).join('');
+  const vids=(AI.videos&&AI.videos.length)?AI.videos:DEMO_VIDEOS.map((v,i)=>({title:v[0],thumb:placeImg('vid'+i,640,360),url:'#'}));
+  $('#video-grid').innerHTML=vids.slice(0,4).map(v=>{
+    const o=v.url&&v.url!=='#'?`<a class="video-card" href="${esc(v.url)}" target="_blank" rel="noopener">`:`<div class="video-card">`;
+    const c=v.url&&v.url!=='#'?'</a>':'</div>';
+    return o+`<img src="${esc(v.thumb)}" alt="${esc(v.title)}" loading="lazy"><div class="play-btn"><svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg></div><div class="ov"><h4>${esc(v.title)}</h4></div>`+c;
+  }).join('');
 }
 
 function bindCards(){
@@ -523,11 +534,11 @@ function toggleCompare(i,btn){
   const idx=compareSel.indexOf(i);
   if(idx>=0){compareSel.splice(idx,1);btn.textContent='＋ Confronta';}
   else{if(compareSel.length>=2){const f=compareSel.shift();$$('#specs-carousel .compare-btn').forEach(b=>{if(+b.dataset.i===f)b.textContent='＋ Confronta';});}compareSel.push(i);btn.textContent='✓ Selezionato';}
-  $('#compare-bar').textContent=compareSel.length?`Selezionati: ${compareSel.map(i=>DEMO_SPECS[i].name).join(' vs ')}`:'';
+  $('#compare-bar').textContent=compareSel.length?`Selezionati: ${compareSel.map(i=>SPECS[i].name).join(' vs ')}`:'';
   if(compareSel.length===2) runCompare();
 }
 async function runCompare(){
-  const [a,b]=compareSel.map(i=>DEMO_SPECS[i]);
+  const [a,b]=compareSel.map(i=>SPECS[i]);
   $('#compare-modal').classList.remove('hidden');
   $('#cmp-content').innerHTML=`<table class="cmp-table"><tr><th></th><th>${esc(a.name)}</th><th>${esc(b.name)}</th></tr><tr><td>Prezzo</td><td>${esc(a.price)}</td><td>${esc(b.price)}</td></tr><tr><td>Voto</td><td>${'★'.repeat(a.rating)}</td><td>${'★'.repeat(b.rating)}</td></tr></table><p style="margin-top:12px"><span class="ai-badge">🤖</span> <span id="cmp-ai">Analisi AI in corso…</span></p>`;
   let txt;
@@ -708,6 +719,7 @@ async function loadFromBot(){
   AI.demo=false;
   AI.articles=d.articles.map(a=>({...a,imageUrl:aiImg(a)}));
   AI.ticker=d.ticker||[];AI.editorial=d.editorial||'';AI.tags=d.tags||[];
+  AI.specs=d.specs||[];AI.videos=d.videos||[];
   setLive(true);populate();
 }
 function runDemo(){

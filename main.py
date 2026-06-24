@@ -239,7 +239,7 @@ SHORT_DOMAINS = ["amzn.eu", "amzn.com", "amzn.to", "amzlink.to", "a.co"]
 RECENT_DEALS = deque(maxlen=60)   # offerte inviate dagli utenti (storico mostrato sul sito)
 ARTICLES = deque(maxlen=20)       # articoli/recensioni della "redazione" (1/giorno)
 # Portale "Gli Affari di Nello": batch di contenuti tech generati da Groq, serviti via /portal.json
-PORTAL = {"articles": [], "ticker": [], "editorial": "", "tags": [], "updated": 0}
+PORTAL = {"articles": [], "ticker": [], "editorial": "", "tags": [], "specs": [], "videos": [], "updated": 0}
 
 
 def _find_article(aid):
@@ -313,7 +313,7 @@ def load_persisted_content():
         doc = firestore_db.collection("bot").document("portal").get()
         if doc.exists:
             d = doc.to_dict() or {}
-            for k in ("articles", "tags", "ticker", "editorial", "updated"):
+            for k in ("articles", "tags", "ticker", "editorial", "specs", "videos", "updated"):
                 if k in d:
                     PORTAL[k] = d[k]
             logger.info(f"Portale caricato da Firestore: {len(PORTAL.get('articles', []))} articoli")
@@ -345,7 +345,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         # Portale "Gli Affari di Nello": batch completo (articoli + ticker + editoriale + tag)
         if path.startswith("/portal"):
             arts = [{k: v for k, v in a.items() if k != "cover_b64"} for a in PORTAL.get("articles", [])]
-            return _json_response(self, {**{k: PORTAL[k] for k in ("ticker", "editorial", "tags", "updated")}, "articles": arts})
+            return _json_response(self, {**{k: PORTAL[k] for k in ("ticker", "editorial", "tags", "specs", "videos", "updated")}, "articles": arts})
         # Chat: /ask?q=...  -> risposta Groq (chiave lato server, non esposta al browser)
         if path.startswith("/ask"):
             from urllib.parse import parse_qs, urlparse
@@ -1581,11 +1581,44 @@ def _extract_json_array(text):
     return None
 
 
+def _amazon_search_link(query):
+    from urllib.parse import quote_plus
+    link = f"https://www.amazon.it/s?k={quote_plus(query or 'tech')}"
+    return link + (f"&tag={AFFILIATE_TAG}" if AFFILIATE_TAG else "")
+
+
+async def fetch_tech_videos(n=4):
+    """Video tech reali da YouTube (usa YOUTUBE_API_KEY)."""
+    if not YOUTUBE_API_KEY:
+        return []
+    params = {"part": "snippet", "q": "recensione tech smartphone laptop gaming",
+              "type": "video", "maxResults": n, "relevanceLanguage": "it",
+              "order": "viewCount", "videoEmbeddable": "true", "key": YOUTUBE_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get("https://www.googleapis.com/youtube/v3/search", params=params)
+            d = r.json()
+        out = []
+        for it in d.get("items", []):
+            vid = (it.get("id") or {}).get("videoId")
+            if not vid:
+                continue
+            sn = it.get("snippet", {})
+            thumbs = sn.get("thumbnails", {})
+            thumb = (thumbs.get("high") or thumbs.get("medium") or thumbs.get("default") or {}).get("url", "")
+            out.append({"title": sn.get("title", ""), "videoId": vid, "thumb": thumb,
+                        "url": f"https://www.youtube.com/watch?v={vid}"})
+        return out
+    except Exception as e:
+        logger.warning(f"youtube videos: {e}")
+        return []
+
+
 async def generate_portal(context=None):
     """Genera il batch di contenuti del portale 'Gli Affari di Nello' con Groq (max ogni 6h)."""
     if not (GROQ_API_KEY or GEMINI_API_KEY or ai_client):
         return
-    if PORTAL.get("articles") and PORTAL.get("updated") and time.time() - PORTAL["updated"] < 6 * 3600:
+    if PORTAL.get("articles") and PORTAL.get("specs") and PORTAL.get("updated") and time.time() - PORTAL["updated"] < 6 * 3600:
         return
     sys = ("Sei il caporedattore di 'Gli Affari di Nello', portale tech italiano. "
            "Generi notizie e guide tech ORIGINALI, plausibili e attuali, in italiano corretto. "
@@ -1633,13 +1666,31 @@ async def generate_portal(context=None):
         f"In 2-3 frasi scrivi l'editoriale di oggi sul tema tech dominante, a partire da questi titoli: {[a['title'] for a in cleaned[:8]]}",
         220,
     ) or ""
+    # Schede tecniche (prodotti) generate dall'AI, con link Amazon affiliato
+    specs = []
+    specs_raw = await _ai_complete(
+        "Sei un esperto di prodotti tech italiani.",
+        ("Genera 6 schede tecniche di categorie/prodotti tech popolari e realistici. "
+         "Rispondi SOLO con un array JSON, niente altro testo. Ogni elemento: "
+         '{"name":"nome prodotto/categoria","category":"Smartphone|Laptop|Tablet|Gaming|SmartHome|App",'
+         '"price":"fascia di prezzo es. €299-399","rating":<1-5>,"specs":["spec1","spec2","spec3"],'
+         '"pros":"max 8 parole","cons":"max 8 parole","query":"termine di ricerca Amazon"}'),
+        2000,
+    )
+    for s in (_extract_json_array(specs_raw) or [])[:8]:
+        if isinstance(s, dict) and s.get("name"):
+            s["url"] = _amazon_search_link(s.get("query") or s.get("name"))
+            s.pop("query", None)
+            specs.append(s)
     PORTAL["articles"] = cleaned
     PORTAL["tags"] = tags[:14]
     PORTAL["ticker"] = ticker
     PORTAL["editorial"] = editorial.strip()
+    PORTAL["specs"] = specs
+    PORTAL["videos"] = await fetch_tech_videos(4)
     PORTAL["updated"] = int(time.time())
-    _persist_fs("portal", {k: PORTAL[k] for k in ("articles", "tags", "ticker", "editorial", "updated")})
-    logger.info(f"Portale 'Gli Affari di Nello' generato: {len(cleaned)} articoli")
+    _persist_fs("portal", {k: PORTAL[k] for k in ("articles", "tags", "ticker", "editorial", "specs", "videos", "updated")})
+    logger.info(f"Portale generato: {len(cleaned)} articoli, {len(specs)} schede, {len(PORTAL['videos'])} video")
 
 
 # ----------------------------------------------------------------------------
