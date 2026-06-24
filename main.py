@@ -40,6 +40,15 @@ from telegram.ext import (
     ContextTypes,
 )
 
+# Moduli interni
+from ai import (
+    GROQ_API_KEY, GROQ_MODEL,
+    ai_complete as _ai_complete,
+    groq_sync as _groq_sync,
+    extract_json_array as _extract_json_array,
+    ai_status as _ai_status,
+)
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -103,9 +112,7 @@ BRAND_TEXT = os.environ.get("BRAND_TEXT", "Gli Affari di Nello")
 CUTOUT_AI = os.environ.get("CUTOUT_AI", "1").lower() in ("1", "true", "yes", "si")
 U2NET_MODEL_PATH = os.environ.get("U2NET_MODEL_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "u2netp.onnx"))
 
-# AI per i testi dei post — provider unico: Groq (gratuito).
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# AI: provider unico Groq (vedi ai.py). GROQ_API_KEY/GROQ_MODEL importati da ai.
 
 PORT = int(os.environ.get("PORT", 10000))
 
@@ -118,10 +125,6 @@ if not DEEPLINK_TEMPLATE and SKIMLINKS_ID:
 # Firestore (inizializzato in init_firestore)
 firestore_db = None
 USE_FIRESTORE = False
-
-
-def _ai_status() -> str:
-    return f"Groq ({GROQ_MODEL})" if GROQ_API_KEY else "disattivo (template)"
 
 
 logger.info("Bot Configuration:")
@@ -186,25 +189,6 @@ def _find_article(aid):
         if a.get("id") == aid:
             return a
     return None
-
-
-def _groq_sync(system, user, max_tokens=500, model=None):
-    """Chiamata Groq sincrona (per l'HTTP server della chat /ask)."""
-    if not GROQ_API_KEY:
-        return None
-    try:
-        r = httpx.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={"model": model or GROQ_MODEL, "max_tokens": max_tokens, "temperature": 0.8,
-                  "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
-            timeout=30.0,
-        )
-        data = r.json()
-        return (data["choices"][0]["message"]["content"] or "").strip()
-    except Exception as e:
-        logger.warning(f"groq sync: {e}")
-        return None
 
 
 def record_recent_deal(title, price_line=None, store=None, url=None, image=None):
@@ -1317,83 +1301,9 @@ async def generate_ai_review(info: dict, price_line: str) -> str:
     return await _ai_complete(REVIEW_SYSTEM_PROMPT, user, 130)
 
 
-async def _ai_complete(system: str, user: str, max_tokens: int = 400) -> str:
-    if GROQ_API_KEY:
-        return await _groq_chat(system, user, max_tokens)
-    return None
-
-
-async def _groq_chat(system: str, user: str, max_tokens: int = 400) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    payload = {
-        "model": GROQ_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.9,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, headers=headers, json=payload)
-            data = r.json()
-            if "choices" not in data:
-                logger.error(f"Groq response: {str(data)[:300]}")
-                return None
-            return (data["choices"][0]["message"]["content"] or "").strip() or None
-    except Exception as e:
-        logger.error(f"Groq error: {e}")
-        return None
-
-
 # ----------------------------------------------------------------------------
 # Redazione: articoli/recensioni tech generati ogni giorno (con copertina)
 # ----------------------------------------------------------------------------
-ARTICLE_TOPICS = [
-    ("Smartphone Android: come scegliere", "smartphone"),
-    ("Cuffie e auricolari wireless", "cuffie auricolari"),
-    ("Smart TV 4K: guida all'acquisto", "televisore monitor"),
-    ("Domotica e casa intelligente", "casa smart"),
-    ("Gaming e console: cosa sapere", "console gioco"),
-    ("Smartwatch e fitness tracker", "smartwatch tech"),
-    ("Robot aspirapolvere", "robot aspira casa"),
-    ("Tablet: quale comprare", "tablet"),
-    ("Power bank e ricarica rapida", "caricabatterie power tech"),
-    ("Monitor e PC da scrivania", "monitor laptop"),
-    ("Fotocamere e droni", "camera drone tech"),
-    ("Soundbar e audio per casa", "audio cuffie casa"),
-]
-
-ARTICLE_SYSTEM = (
-    "Sei un redattore tech italiano della testata 'Gli Affari di Nello'. "
-    "Scrivi un breve articolo-guida divulgativo e ORIGINALE sull'argomento richiesto, "
-    "utile a chi vuole comprare bene. Tono professionale ma amichevole, in italiano. "
-    "Non inventare prezzi né nomi di modelli specifici: parla di caratteristiche, "
-    "consigli d'acquisto e cosa valutare prima di comprare. "
-    "Formato ESATTO della risposta:\n"
-    "Riga 1: solo il TITOLO (max 70 caratteri, accattivante, senza virgolette)\n"
-    "Righe successive: il corpo in 3-4 paragrafi separati da una riga vuota (circa 250-350 parole)."
-)
-
-
-def _parse_article(text):
-    lines = (text or "").splitlines()
-    title = None
-    body_start = 0
-    for i, l in enumerate(lines):
-        if l.strip():
-            title = l.strip().strip("#* ").strip()
-            body_start = i + 1
-            break
-    if not title:
-        return None, None
-    title = re.sub(r"^(titolo|title)\s*[:\-]\s*", "", title, flags=re.I)
-    body = "\n".join(lines[body_start:]).strip()
-    return title[:90], body
-
-
 def _compose_article_cover(title, category_hint=None) -> bytes:
     from PIL import Image, ImageDraw
 
@@ -1426,70 +1336,47 @@ def _compose_plain_cover(category_hint=None) -> bytes:
 
 
 async def generate_daily_article(context=None):
-    """Genera (max 1 al giorno) un articolo tech con copertina, lo salva e lo pubblica."""
+    """Pubblica una volta al giorno sul canale l'articolo TOP del portale.
+    Niente generazione duplicata: riusa i contenuti già creati da generate_portal."""
+    channel = get_post_channel()
+    if not channel or context is None:
+        return
     today = time.strftime("%Y-%m-%d")
     if ARTICLES and ARTICLES[0].get("date") == today:
         return  # già pubblicato oggi
-    idx = int(time.strftime("%j")) % len(ARTICLE_TOPICS)
-    topic, hint = ARTICLE_TOPICS[idx]
-    text = await _ai_complete(ARTICLE_SYSTEM, f"Argomento: {topic}", 700)
-    if not text:
-        logger.warning("Articolo non generato (AI non disponibile)")
+    arts = PORTAL.get("articles") or []
+    if not arts:
         return
-    title, body = _parse_article(text)
-    if not title or not body:
-        return
+    a = max(arts, key=lambda x: x.get("score", 0))
+    title = a.get("title") or "Novità tech"
+    body = a.get("body") or a.get("excerpt") or ""
     cover = None
     cover_b64 = ""
     try:
         import base64
-        cover = await asyncio.to_thread(_compose_article_cover, title, hint)
+        cover = await asyncio.to_thread(_compose_article_cover, title, a.get("category"))
         cover_b64 = base64.b64encode(cover).decode("ascii")
     except Exception as e:
         logger.warning(f"cover articolo: {e}")
-    aid = today.replace("-", "") + f"{idx:02d}"
+    aid = a.get("id") or today.replace("-", "")
     ARTICLES.appendleft({
-        "id": aid, "title": title, "body": body, "category": topic,
+        "id": aid, "title": title, "body": body, "category": a.get("category"),
         "date": today, "ts": int(time.time()), "cover_b64": cover_b64,
     })
-    # In Firestore salvo solo il testo (le copertine si rigenerano al volo: niente limite 1MB)
-    _persist_fs("articles", {"items": [{k: v for k, v in a.items() if k != "cover_b64"} for a in ARTICLES]})
-    logger.info(f"Articolo generato: {title}")
-
-    channel = get_post_channel()
-    if channel and context is not None:
-        try:
-            import html as _html
-            excerpt = body.split("\n\n")[0][:600]
-            caption = (f"📰 <b>{_html.escape(title)}</b>\n\n{_html.escape(excerpt)}"
-                       f"\n\n<i>Redazione · Gli Affari di Nello</i>")
-            if cover:
-                await context.bot.send_photo(chat_id=channel, photo=io.BytesIO(cover),
-                                             caption=caption, parse_mode=ParseMode.HTML)
-            else:
-                await context.bot.send_message(chat_id=channel, text=caption, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            logger.warning(f"post articolo canale: {e}")
-
-
-def _extract_json_array(text):
-    if not text:
-        return None
+    _persist_fs("articles", {"items": [{k: v for k, v in x.items() if k != "cover_b64"} for x in ARTICLES]})
     try:
-        v = json.loads(text)
-        if isinstance(v, list):
-            return v
-        if isinstance(v, dict):
-            return v.get("articles") or v.get("items")
-    except Exception:
-        pass
-    m = re.search(r"\[[\s\S]*\]", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            pass
-    return None
+        import html as _html
+        excerpt = (body.split("\n\n")[0] if body else "")[:600]
+        caption = (f"📰 <b>{_html.escape(title)}</b>\n\n{_html.escape(excerpt)}"
+                   f"\n\n<i>Gli Affari di Nello</i>")
+        if cover:
+            await context.bot.send_photo(chat_id=channel, photo=io.BytesIO(cover),
+                                         caption=caption, parse_mode=ParseMode.HTML)
+        else:
+            await context.bot.send_message(chat_id=channel, text=caption, parse_mode=ParseMode.HTML)
+        logger.info(f"Articolo del giorno pubblicato sul canale: {title}")
+    except Exception as e:
+        logger.warning(f"post articolo canale: {e}")
 
 
 def _amazon_search_link(query):

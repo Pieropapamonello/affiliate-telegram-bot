@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p /app/models && \
     python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx', '/app/models/u2netp.onnx')"
 
-# Copy bot script
-COPY main.py .
+# Copy bot script + moduli interni
+COPY main.py ai.py ./
 
 # Run the bot
 CMD ["python", "main.py"]
