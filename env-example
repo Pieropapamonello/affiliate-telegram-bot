@@ -1,19 +1,49 @@
-# Copia in .env e compila (NON committare .env)
+# Copia in .env e compila (NON committare .env). Su Render: imposta come Environment Variables.
 
-# Token del bot Telegram (da @BotFather)
-TELEGRAM_TOKEN=il_tuo_token_telegram
+# === Obbligatorio ===
+TELEGRAM_TOKEN=il_tuo_token_da_BotFather
 
-# --- Amazon (tag affiliato nativo) ---
-AFFILIATE_TAG=il_tuo_tag-21
+# === Amazon (tag affiliato nativo) ===
+AFFILIATE_TAG=iltuotag-21
 
-# --- Aggregatore per "qualsiasi store" (scegline UNO) ---
-# Opzione 1 (semplice): Publisher ID Sovrn/Skimlinks
+# === Aggregatore per "qualsiasi store" (opzionale) ===
+# Skimlinks/Sovrn: Publisher ID...
 SKIMLINKS_ID=
-# Opzione 2 (flessibile): template con {url} come segnaposto
-#   es. https://go.skimresources.com/?id=XXXXXX&xs=1&url={url}
-#   es. https://ad.admitad.com/g/CAMPAIGN/?ulp={url}
+# ...oppure un deeplink con {url} (Awin, Admitad, Tradedoubler, ecc.)
 DEEPLINK_TEMPLATE=
 
-# --- Accorciatore YOURLS (opzionale) ---
+# === Accorciatore link (opzionale) ===
+# Bitly: uno o più token separati da virgola (rotazione automatica)
+BITLY_TOKENS=
 YOURLS_URL=
 YOURLS_SIGNATURE=
+
+# === Automazione / canale ===
+CHANNEL_ID=
+CHECK_INTERVAL_MIN=60
+DISCOUNT_THRESHOLD=10
+SETUP_PASSWORD=
+
+# === Firestore (persistenza: offerte, articoli, portale, watchlist) ===
+FIRESTORE_PROJECT_ID=
+GOOGLE_APPLICATION_CREDENTIALS_JSON=   # contenuto JSON del service account
+
+# === AI (Groq) per articoli/schede/chat del portale ===
+GROQ_API_KEY=
+GROQ_MODEL=llama-3.3-70b-versatile
+
+# === YouTube (video reali nel portale) — opzionale ===
+YOUTUBE_API_KEY=
+
+# === Amazon PA-API (dati prodotto affidabili) — opzionale ===
+PAAPI_CLIENT_ID=
+PAAPI_CLIENT_SECRET=
+PAAPI_PARTNER_TAG=
+
+# === Scontorno immagine prodotto (1=on, 0=off se OOM su Render free) ===
+CUTOUT_AI=1
+
+# === Landing/portale (opzionale) ===
+BRAND_TEXT=Gli Affari di Nello
+SITE_CHANNEL_URL=
+SITE_BOT_URL=

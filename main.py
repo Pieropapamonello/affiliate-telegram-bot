@@ -91,9 +91,6 @@ SETUP_PASSWORD = os.environ.get("SETUP_PASSWORD", "")
 FIRESTORE_PROJECT_ID = os.environ.get("FIRESTORE_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "")
 
-# Realtime Database (feed live delle offerte pubblicate) — opzionale
-RTDB_URL = os.environ.get("RTDB_URL", "").rstrip("/")
-
 # YouTube Data API (per trovare un video pertinente e corto) — opzionale
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 VIDEO_MAX_SECONDS = int(os.environ.get("VIDEO_MAX_SECONDS", 180))
@@ -106,13 +103,9 @@ BRAND_TEXT = os.environ.get("BRAND_TEXT", "Gli Affari di Nello")
 CUTOUT_AI = os.environ.get("CUTOUT_AI", "1").lower() in ("1", "true", "yes", "si")
 U2NET_MODEL_PATH = os.environ.get("U2NET_MODEL_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "u2netp.onnx"))
 
-# AI per i testi dei post — opzionale. Provider in ordine: Groq > Gemini > Claude.
+# AI per i testi dei post — provider unico: Groq (gratuito).
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-AI_MODEL = os.environ.get("AI_MODEL", "claude-opus-4-8")
 
 PORT = int(os.environ.get("PORT", 10000))
 
@@ -122,30 +115,13 @@ if not TELEGRAM_TOKEN:
 if not DEEPLINK_TEMPLATE and SKIMLINKS_ID:
     DEEPLINK_TEMPLATE = f"https://go.skimresources.com/?id={SKIMLINKS_ID}&xs=1&url={{url}}"
 
-# Client AI Claude (solo se la chiave è presente e nessun provider gratuito è configurato)
-ai_client = None
-if ANTHROPIC_API_KEY and not (GROQ_API_KEY or GEMINI_API_KEY):
-    try:
-        from anthropic import AsyncAnthropic
-
-        ai_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-    except Exception as e:
-        logger.warning(f"Claude non disponibile: {e}")
-
-# Firestore / RTDB (inizializzati in init_firestore / init_rtdb)
+# Firestore (inizializzato in init_firestore)
 firestore_db = None
 USE_FIRESTORE = False
-rtdb_creds = None
 
 
 def _ai_status() -> str:
-    if GROQ_API_KEY:
-        return f"Groq ({GROQ_MODEL})"
-    if GEMINI_API_KEY:
-        return f"Gemini ({GEMINI_MODEL})"
-    if ai_client:
-        return f"Claude ({AI_MODEL})"
-    return "disattivo (template)"
+    return f"Groq ({GROQ_MODEL})" if GROQ_API_KEY else "disattivo (template)"
 
 
 logger.info("Bot Configuration:")
@@ -157,7 +133,6 @@ logger.info(f"  Canale auto-post: {CHANNEL_ID or '(non impostato)'}")
 logger.info(f"  Monitor prezzi: ogni {CHECK_INTERVAL_MIN} min, soglia {DISCOUNT_THRESHOLD}%")
 logger.info(f"  AI copy: {_ai_status()}")
 logger.info(f"  DB: {'Firestore' if (FIRESTORE_PROJECT_ID or GOOGLE_CREDENTIALS_JSON) else 'file JSON'}")
-logger.info(f"  Realtime DB: {'attivo' if (RTDB_URL and GOOGLE_CREDENTIALS_JSON) else 'disattivo'}")
 logger.info(f"  Amazon PA-API: {'configurata' if (PAAPI_CLIENT_ID and PAAPI_CLIENT_SECRET) else 'disattiva (scraping)'}")
 _short = "Bitly" if BITLY_TOKENS else ("YOURLS" if (YOURLS_URL and YOURLS_SIGNATURE) else "is.gd")
 logger.info(f"  Accorciatore: {_short} ({len(BITLY_TOKENS)} token Bitly)")
@@ -185,42 +160,6 @@ def init_firestore():
     except Exception as e:
         logger.warning(f"Firestore non disponibile, uso file JSON: {e}")
 
-
-def init_rtdb():
-    """Prepara le credenziali per scrivere sul Realtime Database (REST)."""
-    global rtdb_creds
-    if not (RTDB_URL and GOOGLE_CREDENTIALS_JSON):
-        return
-    try:
-        from google.oauth2 import service_account
-
-        info = json.loads(GOOGLE_CREDENTIALS_JSON)
-        rtdb_creds = service_account.Credentials.from_service_account_info(
-            info,
-            scopes=[
-                "https://www.googleapis.com/auth/firebase.database",
-                "https://www.googleapis.com/auth/userinfo.email",
-            ],
-        )
-        logger.info("Realtime DB attivo")
-    except Exception as e:
-        logger.warning(f"Realtime DB non disponibile: {e}")
-
-
-async def rtdb_push(path: str, data: dict) -> None:
-    """Aggiunge un record (push) sul Realtime Database. Non blocca mai il bot in caso di errore."""
-    if not (RTDB_URL and rtdb_creds):
-        return
-    try:
-        import google.auth.transport.requests
-
-        if not rtdb_creds.valid:
-            rtdb_creds.refresh(google.auth.transport.requests.Request())
-        url = f"{RTDB_URL}/{path}.json"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(url, params={"access_token": rtdb_creds.token}, json=data)
-    except Exception as e:
-        logger.warning(f"rtdb_push error: {e}")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1381,10 +1320,6 @@ async def generate_ai_review(info: dict, price_line: str) -> str:
 async def _ai_complete(system: str, user: str, max_tokens: int = 400) -> str:
     if GROQ_API_KEY:
         return await _groq_chat(system, user, max_tokens)
-    if GEMINI_API_KEY:
-        return await _gemini_chat(system, user, max_tokens)
-    if ai_client:
-        return await _claude_chat(system, user, max_tokens)
     return None
 
 
@@ -1410,46 +1345,6 @@ async def _groq_chat(system: str, user: str, max_tokens: int = 400) -> str:
             return (data["choices"][0]["message"]["content"] or "").strip() or None
     except Exception as e:
         logger.error(f"Groq error: {e}")
-        return None
-
-
-async def _gemini_chat(system: str, user: str, max_tokens: int = 400) -> str:
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
-    payload = {
-        "system_instruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.9},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json=payload)
-            data = r.json()
-            if "candidates" not in data:
-                logger.error(f"Gemini response: {str(data)[:300]}")
-                return None
-            parts = data["candidates"][0]["content"]["parts"]
-            text = "".join(p.get("text", "") for p in parts)
-            return text.strip() or None
-    except Exception as e:
-        logger.error(f"Gemini error: {e}")
-        return None
-
-
-async def _claude_chat(system: str, user: str, max_tokens: int = 400) -> str:
-    try:
-        resp = await ai_client.messages.create(
-            model=AI_MODEL,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = next((b.text for b in resp.content if b.type == "text"), None)
-        return text.strip() if text else None
-    except Exception as e:
-        logger.error(f"Claude error: {e}")
         return None
 
 
@@ -1632,7 +1527,7 @@ async def fetch_tech_videos(n=4):
 
 async def generate_portal(context=None):
     """Genera il batch di contenuti del portale 'Gli Affari di Nello' con Groq (max ogni 6h)."""
-    if not (GROQ_API_KEY or GEMINI_API_KEY or ai_client):
+    if not GROQ_API_KEY:
         return
     if (PORTAL.get("articles") and PORTAL.get("specs") and PORTAL["specs"][0].get("review")
             and PORTAL.get("updated") and time.time() - PORTAL["updated"] < 6 * 3600):
@@ -2548,18 +2443,6 @@ async def publish_deal(bot, entry: dict, info: dict, current_price: float, old_p
                        "Amazon" if kind == "amazon" else info.get("source"),
                        short_url, info.get("image"))
 
-    await rtdb_push(
-        "deals",
-        {
-            "title": info.get("title") or "Prodotto",
-            "price": current_price,
-            "old_price": old_price,
-            "url": short_url,
-            "store": "amazon" if entry.get("is_amazon") else "altro",
-            "ts": int(time.time()),
-        },
-    )
-
     destination = get_post_channel() or entry.get("chat_id")
     photo = await get_post_photo(info, price=current_price, old_price=old_price, is_min=hist.get("is_new_min"))
 
@@ -3329,7 +3212,6 @@ def main():
     start_health_check_server()
     init_firestore()
     load_persisted_content()  # ricarica offerte e articoli salvati (no perdita su restart)
-    init_rtdb()
     # concurrent_updates=True: più link inviati di fila vengono elaborati in parallelo
     # (il lavoro pesante immagini/AI gira già in thread separati)
     app = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
