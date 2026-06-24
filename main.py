@@ -236,7 +236,7 @@ SHORT_DOMAINS = ["amzn.eu", "amzn.com", "amzn.to", "amzlink.to", "a.co"]
 # Health check server (Render Web Service ha bisogno di una porta aperta)
 # ----------------------------------------------------------------------------
 # Contenuti pubblicati (in memoria + Firestore) — esposti via HTTP per la landing page
-RECENT_DEALS = deque(maxlen=12)   # ultime offerte
+RECENT_DEALS = deque(maxlen=60)   # offerte inviate dagli utenti (storico mostrato sul sito)
 ARTICLES = deque(maxlen=20)       # articoli/recensioni della "redazione" (1/giorno)
 # Portale "Gli Affari di Nello": batch di contenuti tech generati da Groq, serviti via /portal.json
 PORTAL = {"articles": [], "ticker": [], "editorial": "", "tags": [], "updated": 0}
