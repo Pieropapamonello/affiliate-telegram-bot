@@ -1591,7 +1591,7 @@ async def generate_portal(context=None):
            "Generi notizie e guide tech ORIGINALI, plausibili e attuali, in italiano corretto. "
            "Non spacciare per reali modelli o prezzi inventati: resta concreto ma generale.")
     prompt = (
-        "Genera 10 articoli tech per la home del portale. Rispondi SOLO con un array JSON valido, niente altro testo.\n"
+        "Genera 14 articoli tech per la home del portale. Rispondi SOLO con un array JSON valido, niente altro testo.\n"
         'Ogni elemento: {"title":"max 75 caratteri","excerpt":"max 160 caratteri",'
         '"category":"una tra Smartphone,Laptop,Tablet,SmartHome,Gaming,AI,App,Video",'
         '"priority":"featured|breaking|normal","score":<1-10>,"tags":["t1","t2","t3"],'
@@ -1605,7 +1605,7 @@ async def generate_portal(context=None):
         return
     today = time.strftime("%Y%m%d")
     cleaned = []
-    for i, a in enumerate(arts[:12]):
+    for i, a in enumerate(arts[:20]):
         if not isinstance(a, dict) or not a.get("title"):
             continue
         a["id"] = f"p{today}{i:02d}"

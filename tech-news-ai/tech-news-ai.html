@@ -391,7 +391,14 @@ const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const catColor = c => (getComputedStyle(document.documentElement).getPropertyValue('--cat-'+String(c||'altro').toLowerCase())||'').trim()||'var(--color-accent)';
 const placeImg = (seed,w=600,h=400)=>`https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}`;
-const imgFor = a => a.imageUrl || (a.id ? `${BOT}/img/article/${a.id}.png` : placeImg('n'+(a.title||'')));
+/* Immagine articolo: generata da AI (Pollinations, gratis, senza chiave) a tema con titolo+categoria */
+function aiImg(a){
+  const p = encodeURIComponent((((a.category||'tech')+' '+(a.title||'')+' modern technology, cinematic editorial photo, high detail')).slice(0,200));
+  return `https://image.pollinations.ai/prompt/${p}?width=800&height=450&nologo=true&seed=${encodeURIComponent(String(a.id||a.title||'x'))}`;
+}
+function fallbackImg(a){ return (a.id && String(a.id)[0]==='p') ? `${BOT}/img/article/${a.id}.png?plain=1` : placeImg('f'+(a.id||a.title||'x')); }
+const onerr = a => `this.onerror=null;this.src='${esc(fallbackImg(a))}'`;
+const imgFor = a => a.imageUrl || aiImg(a);
 
 /* ===== DEMO (fallback se il bot non risponde) ===== */
 const DEMO = [
@@ -427,11 +434,11 @@ function renderHero(a){
   $('#hero-excerpt').textContent=a.excerpt||'';
   const c=$('#hero-cat'); c.textContent=a.category||'Tech'; c.style.background=catColor(a.category);
   $('#hero-meta').textContent=`Redazione AI · ${a.readingTime||5} min di lettura`;
-  const img=$('#hero-img'); img.src=imgFor(a); img.alt='Immagine articolo: '+a.title;
+  const img=$('#hero-img'); img.onerror=()=>{img.onerror=null;img.src=fallbackImg(a);}; img.src=imgFor(a); img.alt='Immagine articolo: '+a.title;
 }
 function cardHTML(a,big){
   return `<article class="card-3d${big?' big':''}" data-id="${esc(a.id)}">
-    <img class="ph" src="${esc(imgFor(a))}" alt="Immagine articolo: ${esc(a.title)}" loading="lazy">
+    <img class="ph" src="${esc(imgFor(a))}" alt="Immagine articolo: ${esc(a.title)}" loading="lazy" onerror="${onerr(a)}">
     <div class="card-body">
       <div class="card-row"><span class="cat-badge" style="background:${catColor(a.category)}">${esc(a.category)}</span><span class="ai-badge">🤖 AI</span></div>
       <h3>${esc(a.title)}</h3><p>${esc(a.excerpt)}</p>
@@ -458,7 +465,7 @@ function renderFeed(arts){
   const top3=new Set(list.slice(0,3).map(a=>a.id));
   $('#news-feed').innerHTML=list.slice(0,feedShown).map(a=>`
     <div class="feed-item" data-id="${esc(a.id)}">
-      <img class="thumb" src="${esc(imgFor(a))}" alt="Immagine: ${esc(a.title)}" loading="lazy">
+      <img class="thumb" src="${esc(imgFor(a))}" alt="Immagine: ${esc(a.title)}" loading="lazy" onerror="${onerr(a)}">
       <div><h4>${esc(a.title)}</h4>
         <div class="feed-meta">${top3.has(a.id)?'<span class="trending">🔥 TRENDING</span>':''}<span class="cat-badge" style="background:${catColor(a.category)}">${esc(a.category)}</span><span>${a.readingTime||4} min</span></div>
       </div>
@@ -600,10 +607,25 @@ function initScroll(){
 }
 function revealAnims(){
   if(RM||!window.gsap||!window.ScrollTrigger) return;
+  // ogni intestazione di sezione entra + deriva (parallax)
+  $$('.sec-head').forEach(h=>{
+    gsap.fromTo(h,{opacity:0,y:36},{opacity:1,y:0,duration:.7,ease:'power3.out',scrollTrigger:{trigger:h,start:'top 90%',once:true}});
+    gsap.to(h,{yPercent:-18,ease:'none',scrollTrigger:{trigger:h.closest('section'),start:'top bottom',end:'bottom top',scrub:true}});
+  });
   gsap.fromTo('.featured-grid .card-3d',{opacity:0,y:80,rotateX:-12},{opacity:1,y:0,rotateX:0,duration:1,stagger:.15,ease:'power4.out',scrollTrigger:{trigger:'.featured-grid',start:'top 80%',once:true}});
   gsap.fromTo('.feed-item',{opacity:0,x:-40},{opacity:1,x:0,duration:.6,stagger:.06,ease:'power2.out',scrollTrigger:{trigger:'.news-feed',start:'top 85%',once:true}});
+  gsap.fromTo('.spec-card',{opacity:0,y:60},{opacity:1,y:0,duration:.7,stagger:.08,ease:'power3.out',scrollTrigger:{trigger:'#specs',start:'top 82%',once:true}});
+  // leggera profondità: le immagini delle card derivano nello scroll
+  $$('.card-3d .ph').forEach(im=>gsap.to(im,{yPercent:-8,ease:'none',scrollTrigger:{trigger:im,start:'top bottom',end:'bottom top',scrub:true}}));
   const dirs=[{x:-60,y:-60},{x:60,y:-60},{x:-60,y:60},{x:60,y:60}];
   $$('.video-card').forEach((c,i)=>gsap.fromTo(c,{opacity:0,...dirs[i%4]},{opacity:1,x:0,y:0,duration:.9,ease:'back.out(1.4)',scrollTrigger:{trigger:'.video-grid',start:'top 80%',once:true}}));
+}
+function bindDealTilt(){
+  if(isTouch||RM) return;
+  $$('.deal').forEach(card=>{
+    card.addEventListener('mousemove',e=>{const r=card.getBoundingClientRect();const x=(e.clientX-r.left)/r.width-0.5,y=(e.clientY-r.top)/r.height-0.5;card.style.transform=`perspective(900px) rotateX(${-y*9}deg) rotateY(${x*9}deg) translateZ(14px) scale(1.02)`;});
+    card.addEventListener('mouseleave',()=>{card.style.transform='';});
+  });
 }
 
 /* ===== CHAT (via bot /ask) ===== */
@@ -661,6 +683,8 @@ async function loadDeals(){
       const c=x.url?'</a>':'</div>';
       return o+media+`<div class="dbody">${x.store?`<div class="dstore">${esc(x.store)}</div>`:''}<div class="dtitle">${esc(x.title)}</div>${x.price?`<div class="dprice">${esc(x.price)}</div>`:''}</div>`+c;
     }).join('');
+    bindDealTilt();
+    if(!RM && window.gsap) gsap.fromTo('.deal',{opacity:0,y:50,rotateX:-8},{opacity:1,y:0,rotateX:0,duration:.7,stagger:.05,ease:'power3.out',scrollTrigger:window.ScrollTrigger?{trigger:'#offerte',start:'top 85%',once:true}:undefined});
   }catch(e){ sec.style.display='none'; }
 }
 
@@ -682,7 +706,7 @@ async function loadFromBot(){
   const d=await r.json();
   if(!d.articles||!d.articles.length) throw new Error('vuoto');
   AI.demo=false;
-  AI.articles=d.articles.map(a=>({...a,imageUrl:`${BOT}/img/article/${a.id}.png?plain=1`}));
+  AI.articles=d.articles.map(a=>({...a,imageUrl:aiImg(a)}));
   AI.ticker=d.ticker||[];AI.editorial=d.editorial||'';AI.tags=d.tags||[];
   setLive(true);populate();
 }
