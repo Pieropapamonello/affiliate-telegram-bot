@@ -682,7 +682,7 @@ async function loadFromBot(){
   const d=await r.json();
   if(!d.articles||!d.articles.length) throw new Error('vuoto');
   AI.demo=false;
-  AI.articles=d.articles.map(a=>({...a,imageUrl:`${BOT}/img/article/${a.id}.png`}));
+  AI.articles=d.articles.map(a=>({...a,imageUrl:`${BOT}/img/article/${a.id}.png?plain=1`}));
   AI.ticker=d.ticker||[];AI.editorial=d.editorial||'';AI.tags=d.tags||[];
   setLive(true);populate();
 }

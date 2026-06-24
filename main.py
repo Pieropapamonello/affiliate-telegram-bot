@@ -358,16 +358,19 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             return _json_response(self, {"answer": ans or "Al momento non riesco a rispondere, riprova."})
         # Copertina articolo: /img/article/<id>.png (rigenerata al volo se non in cache)
         if path.startswith("/img/article/"):
+            plain = "plain=1" in self.path
             aid = path.rsplit("/", 1)[-1].replace(".png", "")
             raw = b""
             a = _find_article(aid)
             if a:
                 try:
                     import base64
-                    if not a.get("cover_b64"):
-                        cover = _compose_article_cover(a.get("title") or "", a.get("category"))
-                        a["cover_b64"] = base64.b64encode(cover).decode("ascii")
-                    raw = base64.b64decode(a["cover_b64"])
+                    key = "cover_plain_b64" if plain else "cover_b64"
+                    if not a.get(key):
+                        cover = (_compose_plain_cover(a.get("category")) if plain
+                                 else _compose_article_cover(a.get("title") or "", a.get("category")))
+                        a[key] = base64.b64encode(cover).decode("ascii")
+                    raw = base64.b64decode(a[key])
                 except Exception as e:
                     logger.warning(f"cover regen: {e}")
             if not raw:
@@ -1498,6 +1501,14 @@ def _compose_article_cover(title, category_hint=None) -> bytes:
     draw.rounded_rectangle([60, y + 16, 210, y + 26], radius=5, fill=ACCENT)
     fb = _font(32)
     draw.text((60, H - 66), "Guida all'acquisto · gliaffaridinello", font=fb, fill=(212, 218, 228))
+    buf = io.BytesIO()
+    bg.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _compose_plain_cover(category_hint=None) -> bytes:
+    """Copertina pulita (solo gradiente a tema, senza testo) per le card del portale."""
+    bg = _gradient(1200, 675, category_hint or "")
     buf = io.BytesIO()
     bg.convert("RGB").save(buf, "PNG")
     return buf.getvalue()
