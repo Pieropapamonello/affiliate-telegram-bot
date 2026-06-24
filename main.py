@@ -1921,7 +1921,7 @@ def _cutout_ai(prod):
 
         out_img = src.convert("RGBA")
         out_img.putalpha(mask)
-        bbox = out_img.getbbox()
+        bbox = mask.getbbox()  # ritaglio sul soggetto (canale alpha), non sull'RGB
         if bbox:
             out_img = out_img.crop(bbox)
         return out_img, True
@@ -1962,7 +1962,7 @@ def _cutout_white_bg(prod):
     alpha = alpha.filter(ImageFilter.GaussianBlur(0.8))
     out = prod.convert("RGBA")
     out.putalpha(alpha)
-    bbox = out.getbbox()
+    bbox = alpha.getbbox()  # ritaglio sul SOGGETTO (canale alpha), non sull'RGB bianco
     if bbox:
         out = out.crop(bbox)
     # se ha rimosso quasi tutto o quasi nulla, considera fallita
