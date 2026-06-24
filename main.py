@@ -356,6 +356,22 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
                    f"Notizie del giorno: {titles}")
             ans = _groq_sync(sys, q or "Salve") if q else "Ciao! Chiedimi qualcosa sulla tecnologia di oggi."
             return _json_response(self, {"answer": ans or "Al momento non riesco a rispondere, riprova."})
+        # Articolo completo (lungo) generato on-demand e messo in cache
+        if path.startswith("/article"):
+            from urllib.parse import parse_qs, urlparse
+            aid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+            a = _find_article(aid)
+            if not a:
+                return _json_response(self, {"title": "", "body": ""})
+            if not a.get("full_body"):
+                sysp = ("Sei un giornalista tech italiano della testata 'Gli Affari di Nello'. "
+                        "Scrivi articoli completi, informativi e scorrevoli, in italiano corretto.")
+                pr = (f"Scrivi un articolo completo di 450-600 parole sul tema: \"{a.get('title')}\" "
+                      f"(categoria: {a.get('category')}). Introduzione, 3-4 paragrafi di sviluppo con dettagli "
+                      "concreti e consigli, e una conclusione. Niente titolo, niente markdown: "
+                      "solo paragrafi separati da una riga vuota.")
+                a["full_body"] = _groq_sync(sysp, pr, 1600) or a.get("body", "")
+            return _json_response(self, {"title": a.get("title"), "category": a.get("category"), "body": a.get("full_body")})
         # Copertina articolo: /img/article/<id>.png (rigenerata al volo se non in cache)
         if path.startswith("/img/article/"):
             plain = "plain=1" in self.path
@@ -1618,7 +1634,8 @@ async def generate_portal(context=None):
     """Genera il batch di contenuti del portale 'Gli Affari di Nello' con Groq (max ogni 6h)."""
     if not (GROQ_API_KEY or GEMINI_API_KEY or ai_client):
         return
-    if PORTAL.get("articles") and PORTAL.get("specs") and PORTAL.get("updated") and time.time() - PORTAL["updated"] < 6 * 3600:
+    if (PORTAL.get("articles") and PORTAL.get("specs") and PORTAL["specs"][0].get("review")
+            and PORTAL.get("updated") and time.time() - PORTAL["updated"] < 6 * 3600):
         return
     sys = ("Sei il caporedattore di 'Gli Affari di Nello', portale tech italiano. "
            "Generi notizie e guide tech ORIGINALI, plausibili e attuali, in italiano corretto. "
@@ -1674,7 +1691,8 @@ async def generate_portal(context=None):
          "Rispondi SOLO con un array JSON, niente altro testo. Ogni elemento: "
          '{"name":"nome prodotto/categoria","category":"Smartphone|Laptop|Tablet|Gaming|SmartHome|App",'
          '"price":"fascia di prezzo es. €299-399","rating":<1-5>,"specs":["spec1","spec2","spec3"],'
-         '"pros":"max 8 parole","cons":"max 8 parole","query":"termine di ricerca Amazon"}'),
+         '"review":"2 frasi di recensione in italiano","pros":"max 8 parole","cons":"max 8 parole",'
+         '"query":"termine di ricerca Amazon"}'),
         2000,
     )
     for s in (_extract_json_array(specs_raw) or [])[:8]:
