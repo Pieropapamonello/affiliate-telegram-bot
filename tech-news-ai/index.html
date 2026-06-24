@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gli Affari di Nello — News e guide tech</title>
-<meta name="description" content="Gli Affari di Nello: news, recensioni e guide tecnologiche aggiornate ogni giorno dalla redazione AI. Parallax 3D, smartphone, laptop, gaming, AI e molto altro.">
+<meta name="description" content="Gli Affari di Nello: news, recensioni e guide di tecnologia aggiornate ogni giorno. Smartphone, laptop, gaming, smart home e le migliori offerte.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236366f1'/%3E%3Cpath d='M16 40 L28 18 L34 30 L40 22 L48 40' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@700,900&f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -107,19 +107,19 @@ section{position:relative;padding:90px 0}
 
 .featured-grid{display:grid;grid-template-columns:2fr 1fr;gap:20px}
 .featured-col{display:grid;gap:20px}
-.card-3d{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);overflow:hidden;will-change:transform;transition:transform .25s ease,box-shadow .25s;position:relative}
-.card-3d .ph{aspect-ratio:16/9;object-fit:cover;width:100%;background:var(--color-surface-2)}
-.card-3d.big .ph{aspect-ratio:16/10}
-.card-body{padding:18px 20px}
-.card-body h3{font-size:1.15rem;margin:10px 0 8px}
-.card-3d.big .card-body h3{font-size:1.7rem}
-.card-body p{color:var(--color-text-muted);font-size:.92rem}
-.card-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.expand-btn{margin-top:14px;color:var(--color-accent);font-weight:700;font-size:.86rem;display:inline-flex;align-items:center;gap:6px}
-.article-full{max-height:0;opacity:0;overflow:hidden}
-.article-full .inner{padding:0 20px 20px}
-.article-full p{color:var(--color-text-muted);font-size:.95rem;margin-bottom:10px}
-@media(max-width:860px){.featured-grid{grid-template-columns:1fr}}
+.card-3d{position:relative;height:300px;border-radius:var(--radius-lg);overflow:hidden;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-end;background:linear-gradient(135deg,#1b2030,#0e1118);will-change:transform;transition:transform .25s ease,box-shadow .25s}
+.card-3d:hover{box-shadow:var(--shadow-card)}
+.card-3d.big{height:620px}
+.featured-col .card-3d{height:300px}
+.card-3d .ph{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;background:linear-gradient(135deg,#1b2030,#0e1118)}
+.card-3d .scrim{position:absolute;inset:0;z-index:1;background:linear-gradient(180deg,rgba(7,8,13,0) 28%,rgba(7,8,13,.5) 56%,rgba(7,8,13,.96))}
+.card-3d .card-body{position:relative;z-index:2;padding:20px}
+.card-3d .cat-badge{margin-bottom:10px}
+.card-3d h3{color:#fff;font-size:1.2rem;margin:6px 0}
+.card-3d.big h3{font-size:2rem}
+.card-3d p{color:#cdd3e2;font-size:.92rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.expand-btn{margin-top:12px;display:inline-block;color:#fff;background:rgba(255,255,255,.16);backdrop-filter:blur(6px);padding:8px 14px;border-radius:10px;font-weight:700;font-size:.84rem}
+@media(max-width:860px){.featured-grid{grid-template-columns:1fr}.card-3d.big{height:440px}}
 
 .feed-layout{display:grid;grid-template-columns:1fr 360px;gap:36px;align-items:start}
 .feed-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
@@ -232,7 +232,7 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
 
 <div id="loader">
   <div id="loader-logo">Gli Affari di <b>Nello</b></div>
-  <div id="loader-text">La redazione AI sta preparando le notizie…</div>
+  <div id="loader-text">Caricamento in corso…</div>
   <div id="loader-track"><div id="loader-bar"></div></div>
 </div>
 
@@ -259,12 +259,12 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
         </button>
         <div class="search-box glass" role="search"><input type="text" id="search-input" placeholder="Cerca notizie tech…" aria-label="Cerca notizie"></div>
       </div>
-      <span class="live-badge" id="live-badge"><span class="dot"></span> LIVE AI</span>
+      <span class="live-badge" id="live-badge"><span class="dot"></span> LIVE</span>
       <button class="icon-btn" id="theme-toggle" aria-label="Cambia tema">
         <svg id="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         <svg id="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg>
       </button>
-      <button class="ask-ai" id="ask-ai-btn">🤖 Chiedi all'AI</button>
+      <button class="ask-ai" id="ask-ai-btn">💬 Chiedi a Nello</button>
     </div>
   </div>
 </nav>
@@ -278,11 +278,10 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
     <div>
       <div class="hero-subtitle" id="hero-subtitle">In primo piano</div>
       <h1 id="hero-title">Il futuro della tecnologia, ogni giorno.</h1>
-      <p class="hero-excerpt" id="hero-excerpt">News, recensioni e guide selezionate e scritte dalla redazione AI di Gli Affari di Nello.</p>
+      <p class="hero-excerpt" id="hero-excerpt">News, recensioni e guide di tecnologia, ogni giorno.</p>
       <div id="hero-info">
         <span class="cat-badge" id="hero-cat" style="background:var(--color-accent)">Tech</span>
-        <span class="hero-meta" id="hero-meta">Redazione · 5 min di lettura</span>
-        <span class="ai-badge">🤖 AI</span>
+        <span class="hero-meta" id="hero-meta">La Redazione · 5 min di lettura</span>
       </div>
     </div>
     <div class="hero-image-wrap" id="hero-image">
@@ -301,7 +300,7 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
 </div></section>
 
 <section id="featured"><div class="wrap">
-  <div class="sec-head"><div class="kick">Redazione AI</div><h2>In evidenza</h2></div>
+  <div class="sec-head"><div class="kick">Selezione</div><h2>In evidenza</h2></div>
   <div class="featured-grid" id="featured-grid"></div>
 </div></section>
 
@@ -315,7 +314,7 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
     </div>
     <aside class="sidebar" data-parallax="0.04">
       <div class="widget"><h3>📊 Più letti oggi</h3><ol id="most-read"></ol></div>
-      <div class="widget"><h3>💬 Cosa dice l'AI oggi</h3><p class="editorial" id="editorial">…</p></div>
+      <div class="widget"><h3>✍️ L'editoriale di oggi</h3><p class="editorial" id="editorial">…</p></div>
       <div class="widget"><h3>🏷️ Topic del momento</h3><div class="topic-tags" id="topic-tags"></div></div>
     </aside>
   </div>
@@ -344,7 +343,7 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
     <div class="footer-grid">
       <div>
         <div class="logo" style="margin-bottom:12px">Gli Affari di&nbsp;<b>Nello</b></div>
-        <p style="color:var(--color-text-muted);font-size:.9rem" id="footer-editorial">Il portale tech potenziato dall'intelligenza artificiale.</p>
+        <p style="color:var(--color-text-muted);font-size:.9rem" id="footer-editorial">Tecnologia, recensioni e offerte, ogni giorno.</p>
         <div class="social">
           <a href="#" aria-label="X"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h3l-7 8 8 12h-6l-5-7-5 7H1l8-9L1 2h6l4 6z"/></svg></a>
           <a href="#" aria-label="YouTube"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M23 12s0-4-.5-5.8c-.3-1-1-1.8-2-2C18.7 4 12 4 12 4s-6.7 0-8.5.2c-1 .2-1.7 1-2 2C1 8 1 12 1 12s0 4 .5 5.8c.3 1 1 1.8 2 2C5.3 20 12 20 12 20s6.7 0 8.5-.2c1-.2 1.7-1 2-2C23 16 23 12 23 12zM10 15V9l5 3z"/></svg></a>
@@ -356,19 +355,27 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
       <div><h4>Link Utili</h4><a href="#featured">In evidenza</a><a href="#specs">Schede tecniche</a><a href="#cloud">Trend</a><a href="#video">Video</a></div>
       <div class="newsletter"><h4>Newsletter</h4><p style="color:var(--color-text-muted);font-size:.85rem;margin-bottom:10px" id="nl-preview">Ricevi il meglio della tecnologia.</p><input type="email" id="nl-email" placeholder="La tua email" aria-label="Email newsletter"><button id="nl-btn">Iscriviti</button></div>
     </div>
-    <div class="footer-bottom">© <span id="year"></span> Gli Affari di Nello · Contenuti generati dalla redazione AI</div>
+    <div class="footer-bottom">© <span id="year"></span> Gli Affari di Nello · Tutti i diritti riservati</div>
   </div>
 </footer>
 
 <div id="ai-chat" class="chat-widget glass collapsed" role="dialog" aria-label="Assistente AI" aria-modal="false">
-  <div class="chat-header"><span>🤖 Assistente di Nello</span><button class="chat-toggle" aria-label="Apri/chiudi chat">▲</button></div>
+  <div class="chat-header"><span>💬 Assistente di Nello</span><button class="chat-toggle" aria-label="Apri/chiudi chat">▲</button></div>
   <div class="chat-messages" id="chat-messages"></div>
   <div class="chat-suggestions" id="chat-suggestions">
     <button>Cosa c'è di più importante oggi?</button>
     <button>Miglior smartphone 2025?</button>
     <button>Spiega l'AI generativa</button>
   </div>
-  <div class="chat-input"><input type="text" id="chat-input" placeholder="Chiedi all'AI…" aria-label="Messaggio"><button class="send-btn" id="chat-send" aria-label="Invia">→</button></div>
+  <div class="chat-input"><input type="text" id="chat-input" placeholder="Scrivi un messaggio…" aria-label="Messaggio"><button class="send-btn" id="chat-send" aria-label="Invia">→</button></div>
+</div>
+
+<div class="cmp-overlay hidden" id="art-modal" role="dialog" aria-modal="true" aria-label="Articolo">
+  <div class="cmp-box glass" style="max-width:760px">
+    <div style="display:flex;justify-content:space-between;align-items:center"><div id="art-cat" style="color:var(--color-accent);font-weight:700;text-transform:uppercase;letter-spacing:1px;font-size:.75rem"></div><button class="icon-btn" id="art-close" aria-label="Chiudi">✕</button></div>
+    <h2 id="art-title" style="margin:8px 0 14px"></h2>
+    <div id="art-body" style="color:var(--color-text-muted);line-height:1.7"></div>
+  </div>
 </div>
 
 <div class="cmp-overlay hidden" id="compare-modal" role="dialog" aria-modal="true" aria-label="Confronto prodotti">
@@ -414,7 +421,7 @@ const DEMO = [
   ["Monitor OLED per lavoro e gaming: vale la spesa?","Contrasto infinito e tempi di risposta record: pro e contro.","Gaming",7,["monitor","oled"]]
 ];
 function demoArticles(){
-  return DEMO.map((t,i)=>({id:'d'+i,title:t[0],excerpt:t[1],category:t[2],priority:i===0?'featured':(i<3?'breaking':'normal'),score:t[3],tags:t[4],readingTime:3+(i%6),imageUrl:placeImg('demo'+i,600,400),body:t[1]+"\n\nQuesto è un contenuto dimostrativo: quando il bot-redazione è online, qui appare l'articolo completo scritto dall'AI."}));
+  return DEMO.map((t,i)=>({id:'d'+i,title:t[0],excerpt:t[1],category:t[2],priority:i===0?'featured':(i<3?'breaking':'normal'),score:t[3],tags:t[4],readingTime:3+(i%6),imageUrl:placeImg('demo'+i,600,400),body:t[1]+"\n\nL'articolo completo è disponibile quando il portale è online."}));
 }
 const DEMO_SPECS = [
   {name:"Phone X Pro",price:"€1.199",rating:5,specs:["6.8\" OLED 120Hz","Chip 3nm","Tripla 50MP"],pros:"Display top, fotocamera eccellente",cons:"Prezzo elevato"},
@@ -433,19 +440,27 @@ function renderHero(a){
   $('#hero-title').textContent=a.title;
   $('#hero-excerpt').textContent=a.excerpt||'';
   const c=$('#hero-cat'); c.textContent=a.category||'Tech'; c.style.background=catColor(a.category);
-  $('#hero-meta').textContent=`Redazione AI · ${a.readingTime||5} min di lettura`;
+  $('#hero-meta').textContent=`La Redazione · ${a.readingTime||5} min di lettura`;
   const img=$('#hero-img'); img.onerror=()=>{img.onerror=null;img.src=fallbackImg(a);}; img.src=imgFor(a); img.alt='Immagine articolo: '+a.title;
 }
 function cardHTML(a,big){
   return `<article class="card-3d${big?' big':''}" data-id="${esc(a.id)}">
     <img class="ph" src="${esc(imgFor(a))}" alt="Immagine articolo: ${esc(a.title)}" loading="lazy" onerror="${onerr(a)}">
+    <div class="scrim"></div>
     <div class="card-body">
-      <div class="card-row"><span class="cat-badge" style="background:${catColor(a.category)}">${esc(a.category)}</span><span class="ai-badge">🤖 AI</span></div>
-      <h3>${esc(a.title)}</h3><p>${esc(a.excerpt)}</p>
-      <button class="expand-btn">Leggi articolo ↓</button>
+      <span class="cat-badge" style="background:${catColor(a.category)}">${esc(a.category)}</span>
+      <h3>${esc(a.title)}</h3>
+      <p>${esc(a.excerpt)}</p>
+      <span class="expand-btn">Leggi articolo →</span>
     </div>
-    <div class="article-full"><div class="inner"></div></div>
   </article>`;
+}
+function openArticle(a){
+  if(!a) return;
+  $('#art-cat').textContent=a.category||'';
+  $('#art-title').textContent=a.title||'';
+  $('#art-body').innerHTML=String(a.body||a.excerpt||'').split(/\n\n+/).map(p=>`<p style="margin-bottom:12px">${esc(p)}</p>`).join('');
+  $('#art-modal').classList.remove('hidden');
 }
 function renderFeatured(arts){
   const top=[...arts].sort((x,y)=>y.score-x.score).slice(0,3);
@@ -471,7 +486,7 @@ function renderFeed(arts){
       </div>
     </div>`).join('')||'<p style="color:var(--color-text-muted)">Nessuna notizia in questa categoria.</p>';
   $('#load-more').style.display=feedShown<list.length?'block':'none';
-  $$('#news-feed .feed-item').forEach(it=>it.onclick=()=>{ location.hash='#featured'; setTimeout(()=>{const c=$(`.card-3d[data-id="${CSS.escape(it.dataset.id)}"] .expand-btn`); if(c)c.click();},400); });
+  $$('#news-feed .feed-item').forEach(it=>it.onclick=()=>openArticle(AI.articles.find(x=>String(x.id)===it.dataset.id)));
 }
 function renderFeedRaw(list){ $('#news-feed').innerHTML=list.map(a=>`<div class="feed-item"><img class="thumb" src="${esc(imgFor(a))}" alt=""><div><h4>${esc(a.title)}</h4><div class="feed-meta"><span class="cat-badge" style="background:${catColor(a.category)}">${esc(a.category)}</span></div></div></div>`).join(''); }
 function renderSidebar(arts){
@@ -514,20 +529,9 @@ function bindCards(){
       card.addEventListener('mousemove',e=>{const r=card.getBoundingClientRect();const x=(e.clientX-r.left)/r.width-0.5,y=(e.clientY-r.top)/r.height-0.5;card.style.transform=`perspective(900px) rotateX(${-y*10}deg) rotateY(${x*10}deg) scale3d(1.03,1.03,1.03) translateZ(16px)`;card.style.background=`radial-gradient(circle at ${(x+0.5)*100}% ${(y+0.5)*100}%, rgba(255,255,255,.08) 0%, transparent 60%), var(--color-surface)`;});
       card.addEventListener('mouseleave',()=>{card.style.transform='perspective(900px) rotateX(0) rotateY(0) scale3d(1,1,1)';card.style.background='var(--color-surface)';});
     }
-    const btn=card.querySelector('.expand-btn');
-    btn&&btn.addEventListener('click',e=>{
-      e.stopPropagation();
-      const full=card.querySelector('.article-full'),inner=full.querySelector('.inner');
-      if(full.dataset.open==='1'){closeAcc(full);btn.textContent='Leggi articolo ↓';return;}
-      const a=AI.articles.find(x=>String(x.id)===card.dataset.id);
-      const body=(a&&a.body)||a.excerpt||'';
-      inner.innerHTML=body.split(/\n\n+/).map(p=>`<p>${esc(p)}</p>`).join('');
-      openAcc(full);btn.textContent='Comprimi ↑';
-    });
+    card.addEventListener('click',()=>openArticle(AI.articles.find(x=>String(x.id)===card.dataset.id)));
   });
 }
-function openAcc(el){el.dataset.open='1';if(RM){el.style.maxHeight='none';el.style.opacity='1';return;}gsap.to(el,{maxHeight:el.querySelector('.inner').scrollHeight+40,opacity:1,duration:.5,ease:'power2.out'});}
-function closeAcc(el){el.dataset.open='0';if(RM){el.style.maxHeight='0';el.style.opacity='0';return;}gsap.to(el,{maxHeight:0,opacity:0,duration:.4,ease:'power2.in'});}
 
 let compareSel=[];
 function toggleCompare(i,btn){
@@ -540,13 +544,15 @@ function toggleCompare(i,btn){
 async function runCompare(){
   const [a,b]=compareSel.map(i=>SPECS[i]);
   $('#compare-modal').classList.remove('hidden');
-  $('#cmp-content').innerHTML=`<table class="cmp-table"><tr><th></th><th>${esc(a.name)}</th><th>${esc(b.name)}</th></tr><tr><td>Prezzo</td><td>${esc(a.price)}</td><td>${esc(b.price)}</td></tr><tr><td>Voto</td><td>${'★'.repeat(a.rating)}</td><td>${'★'.repeat(b.rating)}</td></tr></table><p style="margin-top:12px"><span class="ai-badge">🤖</span> <span id="cmp-ai">Analisi AI in corso…</span></p>`;
+  $('#cmp-content').innerHTML=`<table class="cmp-table"><tr><th></th><th>${esc(a.name)}</th><th>${esc(b.name)}</th></tr><tr><td>Prezzo</td><td>${esc(a.price)}</td><td>${esc(b.price)}</td></tr><tr><td>Voto</td><td>${'★'.repeat(a.rating)}</td><td>${'★'.repeat(b.rating)}</td></tr></table><p style="margin-top:12px"><span id="cmp-ai">Confronto in corso…</span></p>`;
   let txt;
   try{ txt=await askBot(`Confronta in italiano in 4-5 frasi e di' a chi conviene: ${a.name} (${a.price}, ${a.pros}) vs ${b.name} (${b.price}, ${b.pros}).`); }
   catch(e){ txt=`${a.name} spicca per ${a.pros.toLowerCase()}, ${b.name} per ${b.pros.toLowerCase()}.`; }
   $('#cmp-ai').textContent=txt;
 }
 $('#cmp-close').onclick=()=>$('#compare-modal').classList.add('hidden');
+$('#art-close').onclick=()=>$('#art-modal').classList.add('hidden');
+$('#art-modal').addEventListener('click',e=>{if(e.target.id==='art-modal')$('#art-modal').classList.add('hidden');});
 
 /* ===== THREE.JS HERO ===== */
 function initHero(){
@@ -650,7 +656,7 @@ async function sendChat(text){
   if(!text.trim()) return;
   appendMsg('user',text);
   const out=appendMsg('ai','…');
-  if(AI.demo){ out.textContent="Modalità Demo: l'assistente AI risponde quando il bot-redazione è online. Riprova tra poco!"; return; }
+  if(AI.demo){ out.textContent="Assistente non disponibile in questo momento. Riprova tra poco!"; return; }
   try{ const ans=await askBot(text);
     // effetto digitazione
     out.textContent=''; let i=0; (function type(){ if(i<=ans.length){out.textContent=ans.slice(0,i);$('#chat-messages').scrollTop=1e9;i+=2;requestAnimationFrame(type);} })();
@@ -707,8 +713,8 @@ function populate(){
   renderFilters(AI.articles);renderFeed(AI.articles);renderSidebar(AI.articles);
   renderSpecs();renderVideos();
   initWordCloud(AI.tags.length?AI.tags:[...new Set(AI.articles.flatMap(a=>a.tags||[]))]);
-  $('#editorial').textContent=AI.editorial||"La redazione AI aggiorna l'editoriale ogni giorno.";
-  $('#footer-editorial').textContent=AI.editorial||"Il portale tech potenziato dall'AI.";
+  $('#editorial').textContent=AI.editorial||"Il punto della redazione sui temi tech del giorno.";
+  $('#footer-editorial').textContent=AI.editorial||"Tecnologia, recensioni e offerte, ogni giorno.";
   renderTicker(AI.ticker.length?AI.ticker:AI.articles.map(a=>a.title));
   revealAnims();
 }
@@ -725,7 +731,7 @@ async function loadFromBot(){
 function runDemo(){
   AI.demo=true;AI.articles=demoArticles();
   AI.ticker=AI.articles.filter(a=>a.priority!=='normal').map(a=>a.title);
-  AI.editorial="Modalità Demo: la redazione AI di Nello pubblica qui le notizie quando il backend è online.";
+  AI.editorial="La redazione di Nello seleziona ogni giorno le notizie tech più importanti.";
   AI.tags=[...new Set(AI.articles.flatMap(a=>a.tags))];
   setLive(false);populate();
 }
