@@ -319,9 +319,10 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             sysp = ("Sei un giornalista tech italiano della testata 'Gli Affari di Nello'. "
                     "Scrivi articoli completi, informativi e scorrevoli, in italiano corretto.")
             pr = (f"Scrivi un articolo completo di 450-600 parole sul tema: \"{a.get('title')}\" "
-                  f"(categoria: {a.get('category')}). Introduzione, 3-4 paragrafi di sviluppo con dettagli "
-                  "concreti e consigli, e una conclusione. Niente titolo, niente markdown: "
-                  "solo paragrafi separati da una riga vuota.")
+                  f"(categoria: {a.get('category')}). Inizia con un'introduzione (senza sottotitolo), "
+                  "poi 2-3 sezioni ognuna con un sottotitolo su una riga che inizia con '## ', "
+                  "e chiudi con una conclusione. Dettagli concreti e consigli pratici. "
+                  "Niente titolo principale. Paragrafi separati da una riga vuota.")
             a["full_body"] = _groq_sync(sysp, pr, 1600) or a.get("body", "")
         _json_response(self, {"title": a.get("title"), "category": a.get("category"), "body": a.get("full_body")})
 

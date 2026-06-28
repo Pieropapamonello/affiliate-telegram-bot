@@ -174,6 +174,18 @@ section{position:relative;padding:90px 0}
 .deal .dstore{font-size:.7rem;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.6px;font-weight:600}
 .deal .dtitle{font-size:.92rem;margin:.3em 0;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.5em}
 .deal .dprice{color:var(--color-accent);font-weight:800;font-family:var(--font-display);font-size:1.05rem}
+.promo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:18px}
+.promo{display:flex;gap:14px;align-items:flex-start;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:20px;color:inherit;transition:transform .2s,border-color .2s}
+.promo:hover{transform:translateY(-4px);border-color:var(--color-accent)}
+.promo-ic{font-size:2rem;line-height:1.1}
+.promo h3{font-size:1.05rem;margin:0 0 4px}
+.promo p{color:var(--color-text-muted);font-size:.88rem;margin:0 0 8px}
+.promo-cta{color:var(--color-accent);font-weight:700;font-size:.85rem}
+.art-meta{color:var(--color-text-muted);font-size:.82rem;margin:-6px 0 14px;display:flex;gap:12px;flex-wrap:wrap}
+.art-related{margin-top:22px;border-top:1px solid var(--color-border);padding-top:16px}
+.art-related h4{font-family:var(--font-display);font-size:1rem;margin-bottom:10px}
+.art-related a{display:block;color:var(--color-text);padding:8px 0;border-bottom:1px solid var(--color-border);font-size:.92rem}
+.art-related a:hover{color:var(--color-accent)}
 
 .video-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px}
 .video-card{position:relative;border-radius:var(--radius-lg);overflow:hidden;aspect-ratio:16/9;cursor:pointer;transition:transform .3s}
@@ -252,6 +264,7 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
       <a href="#feed" data-cat="AI">AI</a>
       <a href="#feed" data-cat="App">App</a>
       <a href="#video">Video</a>
+      <a href="#promo">Promo</a>
     </div>
     <div class="nav-right">
       <div class="search-wrap">
@@ -338,6 +351,11 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
   <div class="video-grid" id="video-grid"></div>
 </div></section>
 
+<section id="promo"><div class="wrap">
+  <div class="sec-head"><div class="kick">Servizi Amazon</div><h2>Prova gratis</h2><p style="color:var(--color-text-muted);margin-top:6px">Abbonamenti Amazon con periodo di prova gratuito. Disdici quando vuoi.</p></div>
+  <div class="promo-grid" id="promo-grid"></div>
+</div></section>
+
 <section id="trasparenza"><div class="wrap">
   <div class="sec-head"><div class="kick">Chiarezza</div><h2>Trasparenza e affiliazione</h2></div>
   <div style="background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:24px;color:var(--color-text-muted);max-width:900px;line-height:1.7">
@@ -383,9 +401,11 @@ footer{position:relative;border-top:1px solid var(--color-border);padding:60px 0
 <div class="cmp-overlay hidden" id="art-modal" role="dialog" aria-modal="true" aria-label="Articolo">
   <div class="cmp-box glass" style="max-width:760px">
     <div style="display:flex;justify-content:space-between;align-items:center"><div id="art-cat" style="color:var(--color-accent);font-weight:700;text-transform:uppercase;letter-spacing:1px;font-size:.75rem"></div><button class="icon-btn" id="art-close" aria-label="Chiudi">✕</button></div>
-    <h2 id="art-title" style="margin:8px 0 14px"></h2>
+    <h2 id="art-title" style="margin:8px 0 6px"></h2>
+    <div class="art-meta" id="art-meta"></div>
     <img id="art-img" alt="" style="width:100%;border-radius:12px;margin-bottom:16px;aspect-ratio:16/9;object-fit:cover;background:linear-gradient(135deg,#1b2030,#0e1118)">
     <div id="art-body" style="color:var(--color-text);line-height:1.8;font-size:1.02rem"></div>
+    <div class="art-related" id="art-related" style="display:none"><h4>Articoli correlati</h4><div id="art-related-list"></div></div>
   </div>
 </div>
 
@@ -410,9 +430,22 @@ const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&l
 const catColor = c => (getComputedStyle(document.documentElement).getPropertyValue('--cat-'+String(c||'altro').toLowerCase())||'').trim()||'var(--color-accent)';
 const placeImg = (seed,w=600,h=400)=>`https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}`;
 /* Immagine articolo: generata da AI (Pollinations, gratis, senza chiave) a tema con titolo+categoria */
+var CAT_STYLE = {
+  Smartphone:"latest smartphone close-up, sleek device, neon reflections",
+  Laptop:"modern ultrabook on desk, workspace, soft light",
+  Tablet:"tablet with stylus, creative desk, minimal",
+  SmartHome:"smart home interior, connected devices, cozy ambient light",
+  Gaming:"gaming setup, RGB lighting, console and controller, dark room",
+  AI:"futuristic artificial intelligence concept, glowing circuits, abstract",
+  App:"mobile apps interface, smartphone in hand, vibrant UI",
+  Video:"video studio, cinema lighting, screens",
+  Altro:"modern technology, gadgets, studio"
+};
 function aiImg(a,w,h){
   w=w||800;h=h||450;
-  const p = encodeURIComponent((((a.category||'tecnologia')+' '+(a.title||'')+', cinematic editorial photography, professional, high detail, 4k, dramatic lighting')).slice(0,210));
+  var style = CAT_STYLE[a.category] || CAT_STYLE.Altro;
+  // prompt vario per categoria + titolo, così le card non si somigliano
+  const p = encodeURIComponent((style+", "+(a.title||"")+", cinematic editorial photography, professional, high detail, 4k").slice(0,210));
   return `https://image.pollinations.ai/prompt/${p}?width=${w}&height=${h}&nologo=true&seed=${encodeURIComponent(String(a.id||a.title||'x'))}`;
 }
 function fallbackImg(a){ return (a.id && String(a.id)[0]==='p') ? `${BOT}/img/article/${a.id}.png?plain=1` : placeImg('f'+(a.id||a.title||'x')); }
@@ -468,19 +501,58 @@ function cardHTML(a,big){
     </div>
   </article>`;
 }
+function artBodyHTML(body){
+  // righe '## Titolo' -> sottotitolo; resto -> paragrafi
+  return String(body).split(/\n\n+/).filter(p=>p.trim()).map(function(p){
+    var m=p.trim().match(/^#{2,3}\s*(.+)/);
+    if(m) return '<h3 style="font-family:var(--font-display);margin:18px 0 6px;font-size:1.2rem">'+esc(m[1])+'</h3>';
+    return '<p style="margin-bottom:14px">'+esc(p)+'</p>';
+  }).join('');
+}
+function renderRelated(a){
+  var rel=AI.articles.filter(function(x){return x.id!==a.id && x.category===a.category;}).slice(0,3);
+  if(rel.length<2) rel=AI.articles.filter(function(x){return x.id!==a.id;}).slice(0,3);
+  var box=$('#art-related');
+  if(!rel.length){ box.style.display='none'; return; }
+  box.style.display='block';
+  $('#art-related-list').innerHTML=rel.map(function(x){return '<a href="#" data-id="'+esc(x.id)+'">'+esc(x.title)+'</a>';}).join('');
+  $$('#art-related-list a').forEach(function(el){el.onclick=function(e){e.preventDefault();openArticle(AI.articles.find(function(y){return String(y.id)===el.dataset.id;}));};});
+}
 async function openArticle(a){
   if(!a) return;
   $('#art-cat').textContent=a.category||'';
   $('#art-title').textContent=a.title||'';
+  var today=new Date().toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'});
+  $('#art-meta').innerHTML='<span>📅 '+today+'</span><span>⏱️ '+(a.readingTime||5)+' min</span><span>✍️ La Redazione</span>';
   const im=$('#art-img'); im.onerror=()=>{im.onerror=null;im.src=fallbackImg(a);}; im.src=imgFor(a);
   $('#art-body').innerHTML='<p style="opacity:.6">Caricamento articolo…</p>';
+  $('#art-related').style.display='none';
   $('#art-modal').classList.remove('hidden');
   $('.cmp-box',$('#art-modal')).scrollTop=0;
   let body=a.body||a.excerpt||'';
   if(!AI.demo && a.id){
     try{ const r=await fetch(`${BOT}/article?id=${encodeURIComponent(a.id)}`,{cache:'no-store'}); const d=await r.json(); if(d&&d.body) body=d.body; }catch(e){}
   }
-  $('#art-body').innerHTML=String(body).split(/\n\n+/).filter(p=>p.trim()).map(p=>`<p style="margin-bottom:14px">${esc(p)}</p>`).join('');
+  $('#art-body').innerHTML=artBodyHTML(body);
+  renderRelated(a);
+}
+
+/* ===== Promo Amazon (bounty, col tag affiliato) ===== */
+var AMZ_TAG="nellobuy-21";
+var PROMOS=[
+  {t:"Amazon Prime",d:"30 giorni gratis: spedizioni veloci, Prime Video e musica.",u:"https://www.amazon.it/amazonprime",ic:"🛒"},
+  {t:"Amazon Music Unlimited",d:"90 milioni di brani senza pubblicità. 30 giorni gratis.",u:"https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited",ic:"🎵"},
+  {t:"Audible",d:"Audiolibri e podcast esclusivi. 30 giorni di prova.",u:"https://www.amazon.it/hz/audible/mlp",ic:"🎧"},
+  {t:"Kindle Unlimited",d:"Oltre 1 milione di eBook. 30 giorni gratis.",u:"https://www.amazon.it/kindle-dbs/hz/signup",ic:"📖"},
+  {t:"Prime Student",d:"90 giorni gratis per studenti, poi metà prezzo.",u:"https://www.amazon.it/joinstudent",ic:"🎓"},
+  {t:"Lista Nozze",d:"Crea la tua lista nozze su Amazon.",u:"https://www.amazon.it/wedding",ic:"💍"}
+];
+function renderPromos(){
+  $('#promo-grid').innerHTML=PROMOS.map(function(p){
+    return '<a class="promo" href="'+p.u+'?tag='+AMZ_TAG+'" target="_blank" rel="nofollow sponsored noopener">'
+      +'<div class="promo-ic">'+p.ic+'</div><div><h3>'+esc(p.t)+'</h3><p>'+esc(p.d)+'</p>'
+      +'<span class="promo-cta">Prova gratis →</span></div></a>';
+  }).join('');
 }
 function renderFeatured(arts){
   const top=[...arts].sort((x,y)=>y.score-x.score).slice(0,3);
@@ -730,7 +802,7 @@ function populate(){
   renderHero(hero);
   renderFeatured(AI.articles);
   renderFilters(AI.articles);renderFeed(AI.articles);renderSidebar(AI.articles);
-  renderSpecs();renderVideos();
+  renderSpecs();renderVideos();renderPromos();
   initWordCloud(AI.tags.length?AI.tags:[...new Set(AI.articles.flatMap(a=>a.tags||[]))]);
   $('#editorial').textContent=AI.editorial||"Il punto della redazione sui temi tech del giorno.";
   $('#footer-editorial').textContent=AI.editorial||"Tecnologia, recensioni e offerte, ogni giorno.";
