@@ -2293,6 +2293,28 @@ def route_via_skimlinks() -> bool:
     return ROUTE_ALL_VIA_SKIMLINKS
 
 
+# Promo Amazon con "bounty" (commissione fissa per iscrizione) — pagine ufficiali Associates
+AMAZON_PROMOS = [
+    ("🛒 Prova Amazon Prime (30gg gratis)", "https://www.amazon.it/amazonprime"),
+    ("🎵 Amazon Music Unlimited (30gg gratis)", "https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited"),
+    ("🎧 Audible (30gg gratis)", "https://www.amazon.it/hz/audible/mlp"),
+    ("📖 Kindle Unlimited (30gg gratis)", "https://www.amazon.it/kindle-dbs/hz/signup"),
+    ("🎓 Prime Student (90gg gratis)", "https://www.amazon.it/joinstudent"),
+    ("💍 Lista Nozze Amazon", "https://www.amazon.it/wedding"),
+    ("👶 Lista Nascita Amazon", "https://www.amazon.it/baby-reg/homepage"),
+]
+
+
+def amazon_promo_keyboard() -> InlineKeyboardMarkup:
+    """Pulsanti delle promo Amazon, ognuno col tag affiliato impostato."""
+    tag = get_affiliate_tag()
+    rows = []
+    for label, url in AMAZON_PROMOS:
+        full = url + (f"?tag={tag}" if tag else "")
+        rows.append([InlineKeyboardButton(label, url=full)])
+    return InlineKeyboardMarkup(rows)
+
+
 def video_enabled() -> bool:
     # Default OFF: i video estratti dalle pagine non sono affidabili (spesso non
     # sono del prodotto). Si usa sempre la card personalizzata. Riattivabile con /setvideo on.
@@ -2457,8 +2479,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     else:
         await update.message.reply_text(
-            "👋 Ciao! Inviami il link di un prodotto (Amazon o altri store) "
-            "e ti restituisco il link affiliato pronto da condividere. 🛒"
+            "👋 <b>Benvenuto su Gli Affari di Nello!</b>\n\n"
+            "• Inviami il <b>link di un prodotto</b> (Amazon o altri store) e ti do l'offerta pronta. 🛒\n"
+            "• /promo — le <b>promo Amazon gratis</b> del momento\n"
+            "• /aiuto — come funziona",
+            parse_mode=ParseMode.HTML,
+        )
+        await update.message.reply_text(
+            "🎁 <b>Promo Amazon attive — prova GRATIS:</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=amazon_promo_keyboard(),
         )
 
 
@@ -2511,8 +2541,13 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await tokens_cmd(update, context)
         await update.message.reply_text("➕ Per aggiungerne: /addtoken <token1> <token2> ...")
     elif text == BTN_TAG:
-        await settag_cmd(update, context)
-        await update.message.reply_text("Routing: /setrouting native|skimlinks")
+        context.user_data["await"] = "amazon_tag"
+        await update.message.reply_text(
+            f"🏷️ Tag Amazon attuale: <b>{get_affiliate_tag() or '(nessuno)'}</b>\n\n"
+            "✍️ Scrivimi ora il <b>nuovo tag</b> (es. <code>nellobuy-21</code>) e lo imposto.\n"
+            "Routing link Amazon: /setrouting native|skimlinks",
+            parse_mode=ParseMode.HTML,
+        )
     elif text == BTN_MERCHANTS:
         await merchants_cmd(update, context)
         await update.message.reply_text("➕ Aggiungi: /setmerchant <dominio> <template_con_{url}>")
@@ -2636,6 +2671,27 @@ async def settag_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if route_via_skimlinks():
         note = "\n\n⚠️ Ora i link Amazon passano da Skimlinks, quindi questo tag NON viene usato. Per usarlo: /setrouting native"
     await update.message.reply_text(f"✅ Tag Amazon impostato: <b>{tag}</b>{note}", parse_mode=ParseMode.HTML)
+
+
+async def promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mostra/pubblica i pulsanti delle promo Amazon (col tag affiliato attuale)."""
+    text = ("🎁 <b>Promo Amazon attive — GRATIS</b>\n"
+            "Prova gratis e disdici quando vuoi 👇")
+    kb = amazon_promo_keyboard()
+    # /promo canale  -> pubblica sul canale (solo admin)
+    if context.args and context.args[0].lower() == "canale" and is_admin(update.effective_user.id):
+        channel = get_post_channel()
+        if not channel:
+            await update.message.reply_text("⚠️ Nessun canale impostato. Usa /setchannel @tuocanale")
+            return
+        try:
+            await context.bot.send_message(channel, text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            await update.message.reply_text("✅ Promo pubblicate sul canale.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Canale non raggiungibile: {e}")
+        return
+    suffix = "\n\n<i>Admin: /promo canale per pubblicarle sul canale.</i>" if is_admin(update.effective_user.id) else ""
+    await update.message.reply_text(text + suffix, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
 async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2993,6 +3049,23 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     text = update.message.text
     user = update.message.from_user
 
+    # Input "in attesa" da un pulsante config (es. Tag Amazon)
+    pending = context.user_data.get("await")
+    if pending and is_admin(update.effective_user.id):
+        context.user_data.pop("await", None)
+        val = (text or "").strip()
+        if pending == "amazon_tag" and val:
+            s = load_settings()
+            s["amazon_tag"] = val
+            save_settings(s)
+            note = ""
+            if route_via_skimlinks():
+                note = "\n⚠️ Routing su Skimlinks: il tag non viene usato. Per usarlo: /setrouting native"
+            await update.message.reply_text(
+                f"✅ Tag Amazon impostato: <b>{val}</b>{note}", parse_mode=ParseMode.HTML
+            )
+        return
+
     original_url = extract_first_url(text)
     if not original_url:
         return
@@ -3116,6 +3189,8 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("aiuto", help_cmd))
+    app.add_handler(CommandHandler("promo", promo_cmd))
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("setchannel", setchannel_cmd))
