@@ -2585,16 +2585,22 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not SETUP_PASSWORD:
         await update.message.reply_text("⚠️ Setup non configurato (manca SETUP_PASSWORD).")
         return
-    if not context.args or context.args[0] != SETUP_PASSWORD:
+    # Password = tutto il testo dopo "/admin " (robusto a caratteri speciali come % & ^)
+    provided = (update.message.text or "").partition(" ")[2].strip()
+    if provided != SETUP_PASSWORD.strip():
         await update.message.reply_text("❌ Password errata. Uso: /admin <password>")
         return
-    s = load_settings()
-    admins = s.get("admins", [])
-    uid = update.effective_user.id
-    if uid not in admins:
-        admins.append(uid)
-        s["admins"] = admins
-        save_settings(s)
+    # Salvataggio admin best-effort: in ogni caso confermiamo l'accesso (no silenzio)
+    try:
+        uid = update.effective_user.id
+        s = load_settings()
+        admins = s.get("admins", [])
+        if uid not in admins:
+            admins.append(uid)
+            s["admins"] = admins
+            save_settings(s)
+    except Exception as e:
+        logger.warning(f"admin save error: {e}")
     await update.message.reply_text(
         "✅ Ora sei admin! Usa i tasti qui sotto 👇",
         reply_markup=ADMIN_KEYBOARD,
