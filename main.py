@@ -2506,6 +2506,7 @@ BTN_TOKENS = "🔑 Token Bitly"
 BTN_TAG = "🏷️ Tag Amazon"
 BTN_MERCHANTS = "🗺️ Negozi"
 BTN_CARD = "🎨 Grafica"
+BTN_PROMO = "🎁 Promo Amazon"
 BTN_HELP = "❓ Aiuto"
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -2514,7 +2515,8 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_CHANNEL, BTN_ADD],
         [BTN_DEAL, BTN_TOKENS],
         [BTN_TAG, BTN_MERCHANTS],
-        [BTN_CARD, BTN_HELP],
+        [BTN_CARD, BTN_PROMO],
+        [BTN_HELP],
     ],
     resize_keyboard=True,
 )
@@ -2561,6 +2563,8 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "/setcard on|off · /setbrand <testo> · /setbg <url|off>",
             parse_mode=ParseMode.HTML,
         )
+    elif text == BTN_PROMO:
+        await promo_cmd(update, context)
     elif text == BTN_HELP:
         await start(update, context)
 
@@ -3213,7 +3217,7 @@ def main():
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
-    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_HELP)})$"
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_PROMO)}|{re.escape(BTN_HELP)})$"
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
