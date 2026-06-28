@@ -90,6 +90,7 @@ CHECK_INTERVAL_MIN = int(os.environ.get("CHECK_INTERVAL_MIN", 60))  # ogni quant
 DISCOUNT_THRESHOLD = float(os.environ.get("DISCOUNT_THRESHOLD", 10))  # % calo minimo per alert
 ANTIDUP_DAYS = float(os.environ.get("ANTIDUP_DAYS", 2))  # non ripubblicare lo stesso prodotto entro N giorni
 SCHEDULED_POST_HOURS = float(os.environ.get("SCHEDULED_POST_HOURS", 0))  # 0 = disattivato
+PROMO_POST_WEEKS = float(os.environ.get("PROMO_POST_WEEKS", 5))  # ogni quante settimane ripubblicare le promo Amazon
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
@@ -1353,6 +1354,38 @@ def _compose_plain_cover(category_hint=None) -> bytes:
     bg = _gradient(1200, 675, category_hint or "")
     buf = io.BytesIO()
     bg.convert("RGB").save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _compose_promo_cover() -> bytes:
+    """Copertina del post promo Amazon: 'PROVE GRATUITE / AMAZON' + brand."""
+    from PIL import Image, ImageDraw
+
+    W, H = 1080, 1080
+    bg = _gradient(W, H, "elettronica tech")  # tema blu
+    draw = ImageDraw.Draw(bg)
+    fk = _font(54)
+    kt = "PROVE GRATUITE"
+    kw = draw.textlength(kt, font=fk)
+    draw.text(((W - kw) / 2, 150), kt, font=fk, fill=ACCENT)
+    fbig = _font(150)
+    for line, y in (("AMAZON", 320),):
+        lw = draw.textlength(line, font=fbig)
+        draw.text(((W - lw) / 2 + 4, y + 4), line, font=fbig, fill=(0, 0, 0))
+        draw.text(((W - lw) / 2, y), line, font=fbig, fill=(245, 247, 252))
+    fs = _font(46)
+    sub = "Music · Audible · Kindle · Prime"
+    sw = draw.textlength(sub, font=fs)
+    draw.text(((W - sw) / 2, 540), sub, font=fs, fill=(210, 216, 226))
+    # footer brand
+    bt = get_brand_text() or "Gli Affari di Nello"
+    fb = _font(64)
+    bw = draw.textlength(bt, font=fb)
+    draw.text(((W - bw) / 2 + 3, H - 180 + 3), bt, font=fb, fill=(0, 0, 0))
+    draw.text(((W - bw) / 2, H - 180), bt, font=fb, fill=(255, 255, 255))
+    draw.rounded_rectangle([(W - 260) / 2, H - 96, (W + 260) / 2, H - 86], radius=5, fill=ACCENT)
+    buf = io.BytesIO()
+    bg.convert("RGB").save(buf, "JPEG", quality=90)
     return buf.getvalue()
 
 
@@ -2709,6 +2742,105 @@ async def promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text + suffix, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
+# Post promo ricorrente: (emoji, nome, beneficio, url bounty) — link accorciati con Bitly, come TESTO
+PROMO_POST_ITEMS = [
+    ("🎵", "Amazon Music Unlimited", "milioni di brani senza pubblicità, prova GRATIS", "https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited"),
+    ("🎧", "Audible", "audiolibri e podcast, prova GRATIS", "https://www.amazon.it/hz/audible/mlp?actionCode=AZIOther35606092201BR"),
+    ("📖", "Kindle Unlimited", "oltre 1 milione di eBook, prova GRATIS", "https://www.amazon.it/kindle-dbs/hz/signup"),
+    ("🛒", "Amazon Prime", "spedizioni veloci + Prime Video, prova GRATIS", "https://www.amazon.it/provaprime"),
+]
+
+
+async def build_promo_message() -> str:
+    """Messaggio promo Amazon con link accorciati Bitly scritti come testo (no pulsanti)."""
+    tag = get_affiliate_tag()
+    lines = [
+        "🎁 <b>PROVE GRATUITE AMAZON</b>",
+        "",
+        "Approfitta delle prove gratuite sui servizi Amazon — disdici quando vuoi! 👇",
+        "",
+        "#Amazon #Promo #Ad",
+        "",
+    ]
+    for emoji, name, benefit, url in PROMO_POST_ITEMS:
+        sep = "&" if "?" in url else "?"
+        full = url + (f"{sep}tag={tag}" if tag else "")
+        short = await shorten_url(full, use_bitly=True)
+        lines.append(f"{emoji} <b>{name}</b>\n💳 {benefit}\n📍 {short}\n")
+    lines.append("❗ Puoi disattivare subito i rinnovi automatici e usare le prove gratis senza alcun costo aggiuntivo.")
+    return "\n".join(lines)
+
+
+async def _send_promo_to_channel(context, channel) -> None:
+    msg = await build_promo_message()
+    try:
+        cover = await asyncio.to_thread(_compose_promo_cover)
+        await context.bot.send_photo(chat_id=channel, photo=io.BytesIO(cover),
+                                     caption=msg, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.warning(f"promo cover/send_photo: {e}")
+        await context.bot.send_message(chat_id=channel, text=msg, parse_mode=ParseMode.HTML,
+                                       disable_web_page_preview=True)
+
+
+async def scheduled_promo_post(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pubblica le promo Amazon sul canale ogni PROMO_POST_WEEKS settimane (anti-spam su restart)."""
+    channel = get_post_channel()
+    if not channel:
+        return
+    s = load_settings()
+    if not s.get("promo_auto"):  # attivato dall'admin con /postpromo on
+        return
+    last = s.get("last_promo_ts", 0)
+    if time.time() - last < PROMO_POST_WEEKS * 7 * 24 * 3600 - 3600:
+        return
+    await _send_promo_to_channel(context, channel)
+    s = load_settings()
+    s["last_promo_ts"] = int(time.time())
+    save_settings(s)
+    logger.info("Promo Amazon pubblicate sul canale (schedulate)")
+
+
+async def postpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin: pubblica subito le promo sul canale e/o attiva la pubblicazione automatica."""
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
+        return
+    arg = (context.args[0].lower() if context.args else "")
+    s = load_settings()
+    if arg == "on":
+        s["promo_auto"] = True
+        save_settings(s)
+        await update.message.reply_text(
+            f"✅ Pubblicazione automatica promo ATTIVA: ogni {int(PROMO_POST_WEEKS)} settimane sul canale.")
+        return
+    if arg == "off":
+        s["promo_auto"] = False
+        save_settings(s)
+        await update.message.reply_text("⏹️ Pubblicazione automatica promo disattivata.")
+        return
+    # default: pubblica subito ORA
+    channel = get_post_channel()
+    if not channel:
+        await update.message.reply_text("⚠️ Nessun canale impostato. Usa /setchannel @tuocanale")
+        return
+    await update.message.reply_text("📣 Pubblico le promo sul canale…")
+    try:
+        await _send_promo_to_channel(context, channel)
+        s = load_settings()
+        s["last_promo_ts"] = int(time.time())
+        save_settings(s)
+        auto = "attiva" if s.get("promo_auto") else "spenta"
+        await update.message.reply_text(
+            f"✅ Promo pubblicate sul canale.\n"
+            f"🔁 Ripetizione automatica: <b>{auto}</b> (ogni {int(PROMO_POST_WEEKS)} settimane).\n"
+            "Usa /postpromo on per attivarla, /postpromo off per fermarla.",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Errore: {e}")
+
+
 async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _deny_if_not_admin(update):
         await update.message.reply_text("❌ Solo gli admin. Usa /admin <password>.")
@@ -3206,6 +3338,7 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("aiuto", help_cmd))
     app.add_handler(CommandHandler("promo", promo_cmd))
+    app.add_handler(CommandHandler("postpromo", postpromo_cmd))
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("setchannel", setchannel_cmd))
@@ -3243,6 +3376,9 @@ def main():
         # Portale 'Gli Affari di Nello': batch contenuti rigenerato ogni 6h
         app.job_queue.run_repeating(generate_portal, interval=6 * 3600, first=30)
         logger.info("Portale: generazione contenuti schedulata")
+        # Promo Amazon ricorrenti sul canale (auto-attivabile con /postpromo on; controllo ogni 12h)
+        app.job_queue.run_repeating(scheduled_promo_post, interval=12 * 3600, first=300)
+        logger.info(f"Promo Amazon: controllo ricorrenza ogni {int(PROMO_POST_WEEKS)} settimane")
     else:
         logger.warning("JobQueue non disponibile: installa python-telegram-bot[job-queue]")
 
