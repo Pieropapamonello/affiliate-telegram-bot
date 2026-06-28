@@ -36,6 +36,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes,
 )
@@ -2566,42 +2567,44 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif text == BTN_PRODUCTS:
         await list_cmd(update, context)
     elif text == BTN_CHANNEL:
+        cur = load_settings().get("channel") or CHANNEL_ID or "(nessuno → posto in chat)"
         await update.message.reply_text(
-            "📢 Manda:  /setchannel @iltuocanale\n"
-            "(prima aggiungi il bot come AMMINISTRATORE del canale). Per togliere: /setchannel off"
+            f"📢 <b>Canale</b> attuale: {cur}\nUsa i pulsanti 👇", parse_mode=ParseMode.HTML,
+            reply_markup=_channel_kb(),
         )
     elif text == BTN_ADD:
-        await update.message.reply_text(
-            "➕ Manda:  /watch <link prodotto> [prezzo]\n"
-            "Es:  /watch https://www.amazon.it/dp/XXXX 19.90"
-        )
+        await _ask(update, context, "watch",
+                   "➕ <b>Incolla il link del prodotto</b> da monitorare.\n"
+                   "Puoi aggiungere il prezzo target dopo il link (es. <code>…dp/XXXX 19.90</code>).")
     elif text == BTN_DEAL:
-        await update.message.reply_text("🔥 Manda:  /deal <link prodotto>")
+        await _ask(update, context, "deal", "🔥 <b>Incolla il link del prodotto</b> da pubblicare subito come offerta.")
     elif text == BTN_TOKENS:
-        await tokens_cmd(update, context)
-        await update.message.reply_text("➕ Per aggiungerne: /addtoken <token1> <token2> ...")
-    elif text == BTN_TAG:
-        context.user_data["await"] = "amazon_tag"
         await update.message.reply_text(
-            f"🏷️ Tag Amazon attuale: <b>{get_affiliate_tag() or '(nessuno)'}</b>\n\n"
-            "✍️ Scrivimi ora il <b>nuovo tag</b> (es. <code>nellobuy-21</code>) e lo imposto.\n"
-            "Routing link Amazon: /setrouting native|skimlinks",
-            parse_mode=ParseMode.HTML,
+            f"🔑 <b>Token Bitly attivi:</b> {len(get_bitly_tokens())}\nUsa i pulsanti 👇",
+            parse_mode=ParseMode.HTML, reply_markup=_tokens_kb(),
+        )
+    elif text == BTN_TAG:
+        cur = get_affiliate_tag() or "(nessuno)"
+        routing = "Skimlinks" if route_via_skimlinks() else "tag nativo"
+        await update.message.reply_text(
+            f"🏷️ <b>Tag Amazon:</b> {cur}\n🔀 <b>Routing link:</b> {routing}\nUsa i pulsanti 👇",
+            parse_mode=ParseMode.HTML, reply_markup=_tag_kb(),
         )
     elif text == BTN_MERCHANTS:
         await merchants_cmd(update, context)
-        await update.message.reply_text("➕ Aggiungi: /setmerchant <dominio> <template_con_{url}>")
+        await update.message.reply_text("Aggiungi un negozio 👇", reply_markup=_merchants_kb())
     elif text == BTN_CARD:
         await update.message.reply_text(
             "🎨 <b>Grafica card</b>\n"
-            f"Card: {'attiva' if card_enabled() else 'disattiva'}\n"
-            f"Scritta: {get_brand_text()}\n"
-            f"Sfondo: {get_bg_image_url() or 'automatico'}\n\n"
-            "/setcard on|off · /setbrand <testo> · /setbg <url|off>",
-            parse_mode=ParseMode.HTML,
+            f"Scritta: <b>{get_brand_text()}</b>\n"
+            f"Sfondo: {get_bg_image_url() or 'automatico'}\nUsa i pulsanti 👇",
+            parse_mode=ParseMode.HTML, reply_markup=_grafica_kb(),
         )
     elif text == BTN_PROMO:
-        await promo_cmd(update, context)
+        await update.message.reply_text(
+            "🎁 <b>Promo Amazon</b>\nPubblica i servizi (Prime, Music, Audible, Kindle…) sul canale.\nUsa i pulsanti 👇",
+            parse_mode=ParseMode.HTML, reply_markup=_promo_admin_kb(),
+        )
     elif text == BTN_HELP:
         await start(update, context)
 
@@ -2839,6 +2842,123 @@ async def postpromo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Errore: {e}")
+
+
+def _ck(label, data):
+    return InlineKeyboardButton(label, callback_data=data)
+
+
+def _grafica_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_ck(f"🎨 Card brandizzata: {'ON ✅' if card_enabled() else 'OFF ⬜'}", "card:toggle")],
+        [_ck(f"🎬 Video: {'ON ✅' if video_enabled() else 'OFF ⬜'}", "video:toggle")],
+        [_ck(f"📝 Link recensione: {'ON ✅' if review_link_enabled() else 'OFF ⬜'}", "review:toggle")],
+        [_ck("✏️ Cambia scritta", "set:brand"), _ck("🖼️ Cambia sfondo", "set:bg")],
+    ])
+
+
+def _channel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_ck("✏️ Imposta / cambia canale", "set:channel")],
+        [_ck("🗑️ Rimuovi canale", "channel:off")],
+    ])
+
+
+def _tokens_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [_ck("➕ Aggiungi token Bitly", "set:tokens")],
+        [_ck("🗑️ Cancella tutti i token", "tokens:clear")],
+    ])
+
+
+def _tag_kb() -> InlineKeyboardMarkup:
+    native = not route_via_skimlinks()
+    return InlineKeyboardMarkup([
+        [_ck("✏️ Cambia tag Amazon", "set:tag")],
+        [_ck(f"{'🟢' if native else '⚪'} Tag nativo", "routing:native"),
+         _ck(f"{'🟢' if not native else '⚪'} Skimlinks", "routing:skim")],
+    ])
+
+
+def _merchants_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_ck("➕ Aggiungi negozio", "set:merchant")]])
+
+
+def _promo_admin_kb() -> InlineKeyboardMarkup:
+    auto = load_settings().get("promo_auto")
+    return InlineKeyboardMarkup([
+        [_ck("📣 Pubblica promo sul canale ORA", "promo:publish")],
+        [_ck(f"🔁 Auto ogni {int(PROMO_POST_WEEKS)} sett.: {'ON ✅' if auto else 'OFF ⬜'}", "promo:auto")],
+        [_ck("👁️ Anteprima link promo", "promo:preview")],
+    ])
+
+
+async def _ask(update: Update, context: ContextTypes.DEFAULT_TYPE, key: str, prompt: str) -> None:
+    """Imposta lo stato 'in attesa' e chiede il valore (modalità conversazionale)."""
+    context.user_data["await"] = key
+    await context.bot.send_message(update.effective_chat.id, prompt, parse_mode=ParseMode.HTML)
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    await q.answer()
+    if not is_admin(update.effective_user.id):
+        return
+    data = q.data or ""
+    s = load_settings()
+    if data == "card:toggle":
+        s["card_enabled"] = not card_enabled(); save_settings(s)
+        await q.edit_message_reply_markup(reply_markup=_grafica_kb())
+    elif data == "video:toggle":
+        s["video_enabled"] = not video_enabled(); save_settings(s)
+        await q.edit_message_reply_markup(reply_markup=_grafica_kb())
+    elif data == "review:toggle":
+        s["review_link"] = not review_link_enabled(); save_settings(s)
+        await q.edit_message_reply_markup(reply_markup=_grafica_kb())
+    elif data == "set:brand":
+        await _ask(update, context, "brand", "✏️ Scrivimi la nuova <b>scritta</b> della card:")
+    elif data == "set:bg":
+        await _ask(update, context, "bg", "🖼️ Mandami l'<b>URL</b> dell'immagine di sfondo (o scrivi <code>off</code>):")
+    elif data == "set:channel":
+        await _ask(update, context, "channel", "✏️ Scrivimi il <b>canale</b> (es. <code>@miocanale</code>).\nIl bot dev'essere <b>amministratore</b> del canale.")
+    elif data == "set:tokens":
+        await _ask(update, context, "tokens", "✏️ Incolla uno o più <b>token Bitly</b> (separati da spazio):")
+    elif data == "set:tag":
+        await _ask(update, context, "amazon_tag", "✏️ Scrivimi il <b>tag Amazon</b> (es. <code>nellobuy-21</code>):")
+    elif data == "set:merchant":
+        await _ask(update, context, "merchant", "✏️ Scrivi: <code>dominio template</code>\nEs:\n<code>aliexpress.com https://go.x/?url={url}</code>")
+    elif data == "channel:off":
+        s["channel"] = ""; save_settings(s)
+        await q.message.reply_text("🗑️ Canale rimosso. Le offerte tornano in chat.")
+    elif data == "tokens:clear":
+        s["bitly_tokens"] = []; save_settings(s)
+        await q.message.reply_text("🗑️ Token Bitly cancellati.")
+    elif data == "routing:native":
+        s["route_all_via_skimlinks"] = False; save_settings(s)
+        await q.edit_message_reply_markup(reply_markup=_tag_kb())
+        await q.message.reply_text("✅ Link Amazon: <b>tag nativo</b> (commissione piena).", parse_mode=ParseMode.HTML)
+    elif data == "routing:skim":
+        s["route_all_via_skimlinks"] = True; save_settings(s)
+        await q.edit_message_reply_markup(reply_markup=_tag_kb())
+        await q.message.reply_text("✅ Link Amazon: <b>via Skimlinks</b>.", parse_mode=ParseMode.HTML)
+    elif data == "promo:auto":
+        s["promo_auto"] = not load_settings().get("promo_auto"); save_settings(s)
+        await q.edit_message_reply_markup(reply_markup=_promo_admin_kb())
+    elif data == "promo:preview":
+        await q.message.reply_text("🎁 <b>Promo Amazon</b> (anteprima):", parse_mode=ParseMode.HTML,
+                                   reply_markup=amazon_promo_keyboard())
+    elif data == "promo:publish":
+        channel = get_post_channel()
+        if not channel:
+            await q.message.reply_text("⚠️ Nessun canale impostato. Usa 📢 Imposta canale.")
+            return
+        await q.message.reply_text("📣 Pubblico le promo sul canale…")
+        try:
+            await _send_promo_to_channel(context, channel)
+            s = load_settings(); s["last_promo_ts"] = int(time.time()); save_settings(s)
+            await q.message.reply_text("✅ Promo pubblicate sul canale.")
+        except Exception as e:
+            await q.message.reply_text(f"❌ Errore: {e}")
 
 
 async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3196,21 +3316,30 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     text = update.message.text
     user = update.message.from_user
 
-    # Input "in attesa" da un pulsante config (es. Tag Amazon)
+    # Input "in attesa" da un pulsante config (modalità conversazionale: niente comandi a mano)
     pending = context.user_data.get("await")
     if pending and is_admin(update.effective_user.id):
         context.user_data.pop("await", None)
         val = (text or "").strip()
-        if pending == "amazon_tag" and val:
+        if not val:
+            return
+        if pending == "amazon_tag":
             s = load_settings()
             s["amazon_tag"] = val
             save_settings(s)
-            note = ""
-            if route_via_skimlinks():
-                note = "\n⚠️ Routing su Skimlinks: il tag non viene usato. Per usarlo: /setrouting native"
+            note = "\n⚠️ Routing su Skimlinks: il tag non viene usato. Cambialo da 🏷️ Tag Amazon." if route_via_skimlinks() else ""
             await update.message.reply_text(
                 f"✅ Tag Amazon impostato: <b>{val}</b>{note}", parse_mode=ParseMode.HTML
             )
+            return
+        fn = {
+            "channel": setchannel_cmd, "watch": watch_cmd, "deal": deal_cmd,
+            "tokens": addtoken_cmd, "brand": setbrand_cmd, "bg": setbg_cmd,
+            "merchant": setmerchant_cmd,
+        }.get(pending)
+        if fn:
+            context.args = val.split()
+            await fn(update, context)
         return
 
     original_url = extract_first_url(text)
@@ -3361,6 +3490,7 @@ def main():
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
     kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_PROMO)}|{re.escape(BTN_HELP)})$"
+    app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
