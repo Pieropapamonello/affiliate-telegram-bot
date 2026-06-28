@@ -2298,7 +2298,7 @@ def route_via_skimlinks() -> bool:
 AMAZON_PROMOS = [
     ("🛒 Prova Amazon Prime (30gg gratis)", "https://www.amazon.it/provaprime"),
     ("🎵 Amazon Music Unlimited (30gg gratis)", "https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited"),
-    ("🎧 Audible (30gg gratis)", "https://www.amazon.it/hz/audible/mlp"),
+    ("🎧 Audible (30gg gratis)", "https://www.amazon.it/hz/audible/mlp?actionCode=AZIOther35606092201BR"),
     ("📖 Kindle Unlimited (30gg gratis)", "https://www.amazon.it/kindle-dbs/hz/signup"),
     ("🎓 Prime Student (90gg gratis)", "https://www.amazon.it/joinstudent"),
     ("💍 Lista Nozze Amazon", "https://www.amazon.it/wedding"),
@@ -2311,7 +2311,11 @@ def amazon_promo_keyboard() -> InlineKeyboardMarkup:
     tag = get_affiliate_tag()
     rows = []
     for label, url in AMAZON_PROMOS:
-        full = url + (f"?tag={tag}" if tag else "")
+        if tag:
+            sep = "&" if "?" in url else "?"
+            full = f"{url}{sep}tag={tag}"
+        else:
+            full = url
         rows.append([InlineKeyboardButton(label, url=full)])
     return InlineKeyboardMarkup(rows)
 
