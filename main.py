@@ -2296,7 +2296,7 @@ def route_via_skimlinks() -> bool:
 
 # Promo Amazon con "bounty" (commissione fissa per iscrizione) — pagine ufficiali Associates
 AMAZON_PROMOS = [
-    ("🛒 Prova Amazon Prime (30gg gratis)", "https://www.amazon.it/amazonprime"),
+    ("🛒 Prova Amazon Prime (30gg gratis)", "https://www.amazon.it/provaprime"),
     ("🎵 Amazon Music Unlimited (30gg gratis)", "https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited"),
     ("🎧 Audible (30gg gratis)", "https://www.amazon.it/hz/audible/mlp"),
     ("📖 Kindle Unlimited (30gg gratis)", "https://www.amazon.it/kindle-dbs/hz/signup"),

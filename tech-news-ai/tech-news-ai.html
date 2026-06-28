@@ -540,12 +540,13 @@ async function openArticle(a){
 /* ===== Promo Amazon (bounty, col tag affiliato) ===== */
 var AMZ_TAG="nellobuy-21";
 var PROMOS=[
-  {t:"Amazon Prime",d:"30 giorni gratis: spedizioni veloci, Prime Video e musica.",u:"https://www.amazon.it/amazonprime",ic:"🛒"},
+  {t:"Amazon Prime",d:"30 giorni gratis: spedizioni veloci, Prime Video e musica.",u:"https://www.amazon.it/provaprime",ic:"🛒"},
   {t:"Amazon Music Unlimited",d:"90 milioni di brani senza pubblicità. 30 giorni gratis.",u:"https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited",ic:"🎵"},
   {t:"Audible",d:"Audiolibri e podcast esclusivi. 30 giorni di prova.",u:"https://www.amazon.it/hz/audible/mlp",ic:"🎧"},
   {t:"Kindle Unlimited",d:"Oltre 1 milione di eBook. 30 giorni gratis.",u:"https://www.amazon.it/kindle-dbs/hz/signup",ic:"📖"},
   {t:"Prime Student",d:"90 giorni gratis per studenti, poi metà prezzo.",u:"https://www.amazon.it/joinstudent",ic:"🎓"},
-  {t:"Lista Nozze",d:"Crea la tua lista nozze su Amazon.",u:"https://www.amazon.it/wedding",ic:"💍"}
+  {t:"Lista Nozze",d:"Crea la tua lista nozze su Amazon.",u:"https://www.amazon.it/wedding",ic:"💍"},
+  {t:"Lista Nascita",d:"Crea la lista nascita Amazon, regalo di benvenuto incluso.",u:"https://www.amazon.it/baby-reg/homepage",ic:"👶"}
 ];
 function renderPromos(){
   $('#promo-grid').innerHTML=PROMOS.map(function(p){
