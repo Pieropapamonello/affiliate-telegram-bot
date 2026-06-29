@@ -37,6 +37,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    ChatMemberHandler,
     filters,
     ContextTypes,
 )
@@ -2745,32 +2746,32 @@ async def promo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text + suffix, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
-# Post promo ricorrente: (emoji, nome, beneficio, url bounty) — link accorciati con Bitly, come TESTO
+# Post promo ricorrente: (id, emoji, nome, offerta_default, url bounty). Offerte modificabili dal bot.
 PROMO_POST_ITEMS = [
-    ("🎵", "Amazon Music Unlimited", "milioni di brani senza pubblicità, prova GRATIS", "https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited"),
-    ("🎧", "Audible", "audiolibri e podcast, prova GRATIS", "https://www.amazon.it/hz/audible/mlp?actionCode=AZIOther35606092201BR"),
-    ("📖", "Kindle Unlimited", "oltre 1 milione di eBook, prova GRATIS", "https://www.amazon.it/kindle-dbs/hz/signup"),
-    ("🛒", "Amazon Prime", "spedizioni veloci + Prime Video, prova GRATIS", "https://www.amazon.it/provaprime"),
+    ("music", "🎵", "Amazon Music Unlimited", "4 mesi GRATIS", "https://www.amazon.it/gp/dmusic/promotions/AmazonMusicUnlimited"),
+    ("audible", "🎧", "Audible", "3 mesi a 0,99€", "https://www.amazon.it/hz/audible/mlp?actionCode=AZIOther35606092201BR"),
+    ("kindle", "📖", "Kindle Unlimited", "3 mesi GRATIS", "https://www.amazon.it/kindle-dbs/hz/signup"),
+    ("prime", "🛒", "Amazon Prime", "30 giorni GRATIS", "https://www.amazon.it/provaprime"),
 ]
 
 
+def _promo_offer(item_id, default):
+    return (load_settings().get("promo_offers", {}) or {}).get(item_id) or default
+
+
 async def build_promo_message() -> str:
-    """Messaggio promo Amazon con link accorciati Bitly scritti come testo (no pulsanti)."""
+    """Messaggio promo Amazon compatto, con link Bitly come TESTO (copiabili)."""
     tag = get_affiliate_tag()
-    lines = [
-        "🎁 <b>PROVE GRATUITE AMAZON</b>",
-        "",
-        "Approfitta delle prove gratuite sui servizi Amazon — disdici quando vuoi! 👇",
-        "",
-        "#Amazon #Promo #Ad",
-        "",
-    ]
-    for emoji, name, benefit, url in PROMO_POST_ITEMS:
+    lines = ["🎁 <b>Approfittate delle promo attive GRATUITE</b>", ""]
+    for item_id, emoji, name, default_offer, url in PROMO_POST_ITEMS:
+        offer = _promo_offer(item_id, default_offer)
         sep = "&" if "?" in url else "?"
         full = url + (f"{sep}tag={tag}" if tag else "")
         short = await shorten_url(full, use_bitly=True)
-        lines.append(f"{emoji} <b>{name}</b>\n💳 {benefit}\n📍 {short}\n")
-    lines.append("❗ Puoi disattivare subito i rinnovi automatici e usare le prove gratis senza alcun costo aggiuntivo.")
+        lines.append(f"{emoji} <b>{name}</b> — {offer}\n🔗 {short}\n")
+    lines.append("❗ Disattiva subito i rinnovi automatici: usi le prove senza alcun costo.")
+    lines.append("")
+    lines.append("#Amazon #Promo #Ad")
     return "\n".join(lines)
 
 
@@ -2859,8 +2860,9 @@ def _grafica_kb() -> InlineKeyboardMarkup:
 
 def _channel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [_ck("✏️ Imposta / cambia canale", "set:channel")],
-        [_ck("🗑️ Rimuovi canale", "channel:off")],
+        [_ck("✏️ Imposta canale (@nome)", "set:channel")],
+        [_ck("📍 Usa QUESTA chat/gruppo", "channel:here")],
+        [_ck("🗑️ Rimuovi destinazione", "channel:off")],
     ])
 
 
@@ -2887,9 +2889,10 @@ def _merchants_kb() -> InlineKeyboardMarkup:
 def _promo_admin_kb() -> InlineKeyboardMarkup:
     auto = load_settings().get("promo_auto")
     return InlineKeyboardMarkup([
-        [_ck("📣 Pubblica promo sul canale ORA", "promo:publish")],
+        [_ck("📣 Pubblica promo ORA", "promo:publish")],
         [_ck(f"🔁 Auto ogni {int(PROMO_POST_WEEKS)} sett.: {'ON ✅' if auto else 'OFF ⬜'}", "promo:auto")],
-        [_ck("👁️ Anteprima link promo", "promo:preview")],
+        [_ck("👁️ Anteprima (link copiabili)", "promo:preview")],
+        [_ck("✏️ Modifica testo offerte", "set:promo_offers")],
     ])
 
 
@@ -2927,9 +2930,19 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _ask(update, context, "amazon_tag", "✏️ Scrivimi il <b>tag Amazon</b> (es. <code>nellobuy-21</code>):")
     elif data == "set:merchant":
         await _ask(update, context, "merchant", "✏️ Scrivi: <code>dominio template</code>\nEs:\n<code>aliexpress.com https://go.x/?url={url}</code>")
+    elif data == "set:promo_offers":
+        cur = load_settings().get("promo_offers", {}) or {}
+        rows = "\n".join(f"{iid} = {cur.get(iid, dflt)}" for iid, _e, _n, dflt, _u in PROMO_POST_ITEMS)
+        await _ask(update, context, "promo_offers",
+                   "✏️ Modifica le offerte (una per riga, formato <code>id = testo</code>).\n"
+                   "Copia, cambia il testo e rimandamelo:\n\n<code>" + rows + "</code>")
+    elif data == "channel:here":
+        s["channel"] = str(q.message.chat.id); save_settings(s)
+        nome = q.message.chat.title or "questa chat"
+        await q.message.reply_text(f"✅ Destinazione impostata: <b>{nome}</b>.\nQui pubblicherò offerte e promo.", parse_mode=ParseMode.HTML)
     elif data == "channel:off":
         s["channel"] = ""; save_settings(s)
-        await q.message.reply_text("🗑️ Canale rimosso. Le offerte tornano in chat.")
+        await q.message.reply_text("🗑️ Destinazione rimossa. Le offerte tornano in chat.")
     elif data == "tokens:clear":
         s["bitly_tokens"] = []; save_settings(s)
         await q.message.reply_text("🗑️ Token Bitly cancellati.")
@@ -2945,8 +2958,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         s["promo_auto"] = not load_settings().get("promo_auto"); save_settings(s)
         await q.edit_message_reply_markup(reply_markup=_promo_admin_kb())
     elif data == "promo:preview":
-        await q.message.reply_text("🎁 <b>Promo Amazon</b> (anteprima):", parse_mode=ParseMode.HTML,
-                                   reply_markup=amazon_promo_keyboard())
+        msg = await build_promo_message()
+        await q.message.reply_text(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
     elif data == "promo:publish":
         channel = get_post_channel()
         if not channel:
@@ -2959,6 +2972,27 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text("✅ Promo pubblicate sul canale.")
         except Exception as e:
             await q.message.reply_text(f"❌ Errore: {e}")
+
+
+async def on_bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Quando il bot viene aggiunto a un gruppo/canale, propone di usarlo come destinazione."""
+    cm = update.my_chat_member
+    if not cm:
+        return
+    status = cm.new_chat_member.status
+    chat = cm.chat
+    if status in ("member", "administrator") and chat.type in ("group", "supergroup", "channel"):
+        try:
+            await context.bot.send_message(
+                chat.id,
+                "👋 <b>Gli Affari di Nello</b> è qui!\n"
+                "Per pubblicare in questa chat le <b>offerte</b> e le <b>promo Amazon</b>, "
+                "un amministratore può premere il pulsante 👇",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[_ck("📍 Usa questa chat per offerte/promo", "channel:here")]]),
+            )
+        except Exception as e:
+            logger.warning(f"on_bot_added: {e}")
 
 
 async def setrouting_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3316,9 +3350,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     text = update.message.text
     user = update.message.from_user
 
-    # Input "in attesa" da un pulsante config (modalità conversazionale: niente comandi a mano)
+    # Input "in attesa" da un pulsante config — SOLO in chat privata col bot (mai nei gruppi)
     pending = context.user_data.get("await")
-    if pending and is_admin(update.effective_user.id):
+    if pending and is_admin(update.effective_user.id) and update.effective_chat.type == "private":
         context.user_data.pop("await", None)
         val = (text or "").strip()
         if not val:
@@ -3331,6 +3365,19 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(
                 f"✅ Tag Amazon impostato: <b>{val}</b>{note}", parse_mode=ParseMode.HTML
             )
+            return
+        if pending == "promo_offers":
+            offers = {}
+            for line in val.splitlines():
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    k, v = k.strip().lower(), v.strip()
+                    if k and v:
+                        offers[k] = v
+            s = load_settings()
+            s["promo_offers"] = offers
+            save_settings(s)
+            await update.message.reply_text(f"✅ Offerte promo aggiornate ({len(offers)} voci). Usa 👁️ Anteprima per vederle.")
             return
         fn = {
             "channel": setchannel_cmd, "watch": watch_cmd, "deal": deal_cmd,
@@ -3491,6 +3538,7 @@ def main():
     app.add_handler(CommandHandler("deal", deal_cmd))
     kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_PROMO)}|{re.escape(BTN_HELP)})$"
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(ChatMemberHandler(on_bot_added, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
