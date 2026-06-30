@@ -2547,6 +2547,7 @@ BTN_MERCHANTS = "🗺️ Negozi"
 BTN_CARD = "🎨 Grafica"
 BTN_PROMO = "🎁 Promo Amazon"
 BTN_ERRORI = "🛑 Errori prezzo"
+BTN_USATO = "♻️ Sconti Usato"
 BTN_HELP = "❓ Aiuto"
 
 ADMIN_KEYBOARD = ReplyKeyboardMarkup(
@@ -2556,7 +2557,8 @@ ADMIN_KEYBOARD = ReplyKeyboardMarkup(
         [BTN_DEAL, BTN_TOKENS],
         [BTN_TAG, BTN_MERCHANTS],
         [BTN_CARD, BTN_PROMO],
-        [BTN_ERRORI, BTN_HELP],
+        [BTN_ERRORI, BTN_USATO],
+        [BTN_HELP],
     ],
     resize_keyboard=True,
 )
@@ -2609,9 +2611,15 @@ async def keyboard_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     elif text == BTN_ERRORI:
         await update.message.reply_text(
-            f"🛑 <b>Errori di prezzo</b>\nSorgente: <b>{get_errori_source()}</b>\n"
+            f"🛑 <b>Errori di prezzo</b>\nSorgente: <b>{get_feed_source('errori')}</b>\n"
             "Aggrega i deal dal canale pubblico e li pubblica nella destinazione (link originali).\nUsa i pulsanti 👇",
-            parse_mode=ParseMode.HTML, reply_markup=_errori_kb(),
+            parse_mode=ParseMode.HTML, reply_markup=_feed_kb("errori"),
+        )
+    elif text == BTN_USATO:
+        await update.message.reply_text(
+            f"♻️ <b>Sconti Usato</b>\nSorgente: <b>{get_feed_source('usato')}</b>\n"
+            "Offerte su prodotti resi/come nuovi dal canale pubblico, pubblicate nella destinazione (link originali).\nUsa i pulsanti 👇",
+            parse_mode=ParseMode.HTML, reply_markup=_feed_kb("usato"),
         )
     elif text == BTN_HELP:
         await start(update, context)
@@ -2795,22 +2803,28 @@ async def _send_promo_to_channel(context, channel) -> None:
 
 
 # ----------------------------------------------------------------------------
-# Errori di prezzo: aggrega i deal da un canale Telegram PUBBLICO (via t.me/s/)
-# I link restano quelli originali (nessun re-tag). Solo uso personale/gruppo amici.
+# Feed deal: aggrega da canali Telegram PUBBLICI (t.me/s/). Link ORIGINALI (no re-tag).
 # ----------------------------------------------------------------------------
-def get_errori_source() -> str:
-    return (load_settings().get("errori_source") or "scontierrati")
+FEEDS = {
+    "errori": {"label": "🛑 Errori prezzo", "title": "‼️ ERRORE DI PREZZO", "default_source": "scontierrati"},
+    "usato": {"label": "♻️ Sconti Usato", "title": "♻️ SCONTO USATO / COME NUOVO", "default_source": "scontiusato"},
+}
 
 
-async def fetch_price_errors(source: str = None, limit: int = 8) -> list:
+def get_feed_source(feed: str) -> str:
+    return load_settings().get(f"feed_{feed}_source") or FEEDS.get(feed, {}).get("default_source", "")
+
+
+async def fetch_feed(feed: str, limit: int = 8) -> list:
     """Legge la pagina pubblica t.me/s/<canale> ed estrae (testo breve + link originale)."""
-    src = (source or get_errori_source()).strip().lstrip("@")
+    src = get_feed_source(feed).strip().lstrip("@")
     src = src.replace("https://t.me/", "").replace("t.me/", "").replace("s/", "").strip("/").split("/")[0]
-    url = f"https://t.me/s/{src}"
+    if not src:
+        return []
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
                                      headers={"User-Agent": USER_AGENTS[0]}) as c:
-            r = await c.get(url)
+            r = await c.get(f"https://t.me/s/{src}")
         if r.status_code != 200:
             return []
         soup = BeautifulSoup(r.text, "html.parser")
@@ -2819,63 +2833,60 @@ async def fetch_price_errors(source: str = None, limit: int = 8) -> list:
             tx = msg.select_one(".tgme_widget_message_text")
             if not tx:
                 continue
-            links = []
-            for a in tx.select("a[href]"):
-                href = a.get("href", "")
-                if href.startswith("http") and "t.me/" not in href and "telegram." not in href:
-                    links.append(href)
+            links = [a.get("href", "") for a in tx.select("a[href]")
+                     if a.get("href", "").startswith("http") and "t.me/" not in a.get("href", "")
+                     and "telegram." not in a.get("href", "")]
             if not links:
                 continue
-            text = tx.get_text(" ", strip=True)
-            text = re.sub(r"\s+", " ", text)[:160]
+            text = re.sub(r"\s+", " ", tx.get_text(" ", strip=True))[:160]
             items.append({"text": text, "url": links[0]})
-        return items[-limit:][::-1]  # più recenti prima
+        return items[-limit:][::-1]
     except Exception as e:
-        logger.warning(f"fetch_price_errors: {e}")
+        logger.warning(f"fetch_feed {feed}: {e}")
         return []
 
 
-def _errori_post_text(item) -> str:
+def _feed_post_text(feed: str, item) -> str:
     import html as _html
-    return (f"‼️ <b>ERRORE DI PREZZO</b>\n\n{_html.escape(item['text'])}\n\n🔗 {item['url']}")
+    title = FEEDS.get(feed, {}).get("title", "OFFERTA")
+    return f"<b>{title}</b>\n\n{_html.escape(item['text'])}\n\n🔗 {item['url']}"
 
 
-def _errori_kb() -> InlineKeyboardMarkup:
-    auto = load_settings().get("errori_auto")
+def _feed_kb(feed: str) -> InlineKeyboardMarkup:
+    auto = load_settings().get(f"feed_{feed}_auto")
     return InlineKeyboardMarkup([
-        [_ck("📥 Mostra ultimi errori di prezzo", "err:fetch")],
-        [_ck("📣 Pubblica gli ultimi nella destinazione", "err:publish")],
-        [_ck(f"🔁 Auto (quando appaiono): {'ON ✅' if auto else 'OFF ⬜'}", "err:auto")],
-        [_ck("✏️ Cambia canale sorgente", "set:errsource")],
+        [_ck("📥 Mostra ultimi", f"f:{feed}:fetch")],
+        [_ck("📣 Pubblica nella destinazione", f"f:{feed}:publish")],
+        [_ck(f"🔁 Auto (quando appaiono): {'ON ✅' if auto else 'OFF ⬜'}", f"f:{feed}:auto")],
+        [_ck("✏️ Cambia canale sorgente", f"f:{feed}:src")],
     ])
 
 
-async def scheduled_errori_post(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Se attivo, pubblica i NUOVI errori di prezzo nella destinazione (dedup per link)."""
-    s = load_settings()
-    if not s.get("errori_auto"):
-        return
+async def scheduled_feeds_post(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Se attivo, pubblica i NUOVI deal di ogni feed nella destinazione (dedup per link)."""
     channel = get_post_channel()
     if not channel:
         return
-    items = await fetch_price_errors(limit=10)
-    if not items:
-        return
-    seen = s.get("errori_seen", [])
-    new = [it for it in items if it["url"] not in seen]
-    if not new:
-        return
-    for it in reversed(new):  # dal più vecchio al più nuovo
-        try:
-            await context.bot.send_message(channel, _errori_post_text(it), parse_mode=ParseMode.HTML,
-                                           disable_web_page_preview=False)
-        except Exception as e:
-            logger.warning(f"errori post: {e}")
-    seen = ([it["url"] for it in items] + seen)[:200]
-    s = load_settings()
-    s["errori_seen"] = seen
-    save_settings(s)
-    logger.info(f"Errori di prezzo: pubblicati {len(new)} nuovi nella destinazione")
+    for feed in FEEDS:
+        s = load_settings()
+        if not s.get(f"feed_{feed}_auto"):
+            continue
+        items = await fetch_feed(feed, limit=10)
+        if not items:
+            continue
+        seen = s.get(f"feed_{feed}_seen", [])
+        new = [it for it in items if it["url"] not in seen]
+        if not new:
+            continue
+        for it in reversed(new):
+            try:
+                await context.bot.send_message(channel, _feed_post_text(feed, it), parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logger.warning(f"feed auto {feed}: {e}")
+        s = load_settings()
+        s[f"feed_{feed}_seen"] = ([it["url"] for it in items] + seen)[:200]
+        save_settings(s)
+        logger.info(f"Feed {feed}: pubblicati {len(new)} nuovi nella destinazione")
 
 
 async def scheduled_promo_post(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3063,38 +3074,43 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text("✅ Promo pubblicate sul canale.")
         except Exception as e:
             await q.message.reply_text(f"❌ Errore: {e}")
-    elif data == "set:errsource":
-        await _ask(update, context, "errsource",
-                   f"✏️ Scrivimi il <b>canale sorgente pubblico</b> (es. <code>scontierrati</code> o <code>@scontierrati</code>).\nSorgente attuale: <b>{get_errori_source()}</b>")
-    elif data == "err:auto":
-        s["errori_auto"] = not load_settings().get("errori_auto"); save_settings(s)
-        await q.edit_message_reply_markup(reply_markup=_errori_kb())
-    elif data == "err:fetch":
-        await q.message.reply_text("🔎 Cerco gli ultimi errori di prezzo…")
-        items = await fetch_price_errors(limit=6)
-        if not items:
-            await q.message.reply_text(f"Nessun risultato da <b>{get_errori_source()}</b>. Verifica il nome del canale.", parse_mode=ParseMode.HTML)
+    elif data.startswith("f:"):
+        _, feed, action = data.split(":", 2)
+        if feed not in FEEDS:
             return
-        for it in items:
-            await q.message.reply_text(_errori_post_text(it), parse_mode=ParseMode.HTML)
-    elif data == "err:publish":
-        channel = get_post_channel()
-        if not channel:
-            await q.message.reply_text("⚠️ Nessuna destinazione. Usa 📢 Imposta canale o 📍 Usa questa chat.")
-            return
-        items = await fetch_price_errors(limit=5)
-        if not items:
-            await q.message.reply_text("Nessun errore di prezzo trovato ora.")
-            return
-        for it in reversed(items):
-            try:
-                await context.bot.send_message(channel, _errori_post_text(it), parse_mode=ParseMode.HTML)
-            except Exception as e:
-                logger.warning(f"err publish: {e}")
-        s = load_settings()
-        s["errori_seen"] = ([it["url"] for it in items] + s.get("errori_seen", []))[:200]
-        save_settings(s)
-        await q.message.reply_text(f"✅ Pubblicati {len(items)} errori di prezzo nella destinazione.")
+        label = FEEDS[feed]["label"]
+        if action == "src":
+            await _ask(update, context, f"feedsrc:{feed}",
+                       f"✏️ Scrivimi il <b>canale sorgente pubblico</b> per {label} (es. <code>{FEEDS[feed]['default_source']}</code>).\nSorgente attuale: <b>{get_feed_source(feed)}</b>")
+        elif action == "auto":
+            s[f"feed_{feed}_auto"] = not load_settings().get(f"feed_{feed}_auto"); save_settings(s)
+            await q.edit_message_reply_markup(reply_markup=_feed_kb(feed))
+        elif action == "fetch":
+            await q.message.reply_text(f"🔎 Cerco gli ultimi da <b>{get_feed_source(feed)}</b>…", parse_mode=ParseMode.HTML)
+            items = await fetch_feed(feed, limit=6)
+            if not items:
+                await q.message.reply_text("Nessun risultato. Verifica il nome del canale sorgente.")
+                return
+            for it in items:
+                await q.message.reply_text(_feed_post_text(feed, it), parse_mode=ParseMode.HTML)
+        elif action == "publish":
+            channel = get_post_channel()
+            if not channel:
+                await q.message.reply_text("⚠️ Nessuna destinazione. Usa 📢 Imposta canale o 📍 Usa questa chat.")
+                return
+            items = await fetch_feed(feed, limit=5)
+            if not items:
+                await q.message.reply_text("Nessun deal trovato ora.")
+                return
+            for it in reversed(items):
+                try:
+                    await context.bot.send_message(channel, _feed_post_text(feed, it), parse_mode=ParseMode.HTML)
+                except Exception as e:
+                    logger.warning(f"feed publish {feed}: {e}")
+            s = load_settings()
+            s[f"feed_{feed}_seen"] = ([it["url"] for it in items] + s.get(f"feed_{feed}_seen", []))[:200]
+            save_settings(s)
+            await q.message.reply_text(f"✅ Pubblicati {len(items)} deal nella destinazione.")
 
 
 async def on_bot_added(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3502,10 +3518,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             save_settings(s)
             await update.message.reply_text(f"✅ Offerte promo aggiornate ({len(offers)} voci). Usa 👁️ Anteprima per vederle.")
             return
-        if pending == "errsource":
+        if pending.startswith("feedsrc:"):
+            feed = pending.split(":", 1)[1]
             src = val.strip().lstrip("@").replace("https://t.me/", "").replace("t.me/", "").strip("/").split("/")[0]
             s = load_settings()
-            s["errori_source"] = src
+            s[f"feed_{feed}_source"] = src
             save_settings(s)
             await update.message.reply_text(f"✅ Canale sorgente impostato: <b>{src}</b>", parse_mode=ParseMode.HTML)
             return
@@ -3666,7 +3683,7 @@ def main():
     app.add_handler(CommandHandler("list", list_cmd))
     app.add_handler(CommandHandler("unwatch", unwatch_cmd))
     app.add_handler(CommandHandler("deal", deal_cmd))
-    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_PROMO)}|{re.escape(BTN_ERRORI)}|{re.escape(BTN_HELP)})$"
+    kb_labels = f"^({re.escape(BTN_CONFIG)}|{re.escape(BTN_PRODUCTS)}|{re.escape(BTN_CHANNEL)}|{re.escape(BTN_ADD)}|{re.escape(BTN_DEAL)}|{re.escape(BTN_TOKENS)}|{re.escape(BTN_TAG)}|{re.escape(BTN_MERCHANTS)}|{re.escape(BTN_CARD)}|{re.escape(BTN_PROMO)}|{re.escape(BTN_ERRORI)}|{re.escape(BTN_USATO)}|{re.escape(BTN_HELP)})$"
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(ChatMemberHandler(on_bot_added, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.Regex(kb_labels) & ~filters.COMMAND, keyboard_router))
@@ -3687,9 +3704,9 @@ def main():
         # Promo Amazon ricorrenti sul canale (auto-attivabile con /postpromo on; controllo ogni 12h)
         app.job_queue.run_repeating(scheduled_promo_post, interval=12 * 3600, first=300)
         logger.info(f"Promo Amazon: controllo ricorrenza ogni {int(PROMO_POST_WEEKS)} settimane")
-        # Errori di prezzo: se attivo, controlla la sorgente ogni 20 min e pubblica i nuovi
-        app.job_queue.run_repeating(scheduled_errori_post, interval=20 * 60, first=180)
-        logger.info("Errori di prezzo: controllo sorgente schedulato (se attivo)")
+        # Feed deal (Errori prezzo + Sconti usato): se attivi, controlla ogni 20 min e pubblica i nuovi
+        app.job_queue.run_repeating(scheduled_feeds_post, interval=20 * 60, first=180)
+        logger.info("Feed deal: controllo sorgenti schedulato (se attivi)")
     else:
         logger.warning("JobQueue non disponibile: installa python-telegram-bot[job-queue]")
 
